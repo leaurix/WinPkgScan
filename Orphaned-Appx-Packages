@@ -1,0 +1,244 @@
+# ============================================================
+# Find-OrphanedAppxFolders.ps1
+#
+# Scans ONLY:
+#   %LOCALAPPDATA%\Packages
+#
+# Finds folders whose Package Family Name is no longer
+# registered/installed for the current Windows user.
+#
+# SAFETY:
+#   - Does NOT delete anything
+#   - Does NOT uninstall anything
+#   - Does NOT modify Windows
+# ============================================================
+
+$PackagesPath = Join-Path $env:LOCALAPPDATA "Packages"
+$ReportPath   = Join-Path $env:USERPROFILE "Desktop\Orphaned-Appx-Packages.txt"
+
+Write-Host ""
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host " AppData\Local\Packages Orphan Scanner" -ForegroundColor Cyan
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host ""
+
+# ------------------------------------------------------------
+# Check Packages directory
+# ------------------------------------------------------------
+
+if (-not (Test-Path -LiteralPath $PackagesPath)) {
+    Write-Host "ERROR: Packages directory was not found." -ForegroundColor Red
+    Write-Host $PackagesPath
+    exit 1
+}
+
+Write-Host "Packages directory:" -ForegroundColor Gray
+Write-Host "  $PackagesPath"
+Write-Host ""
+
+# ------------------------------------------------------------
+# Get currently registered AppX packages
+# ------------------------------------------------------------
+
+Write-Host "Reading installed AppX packages..." -ForegroundColor Yellow
+
+$InstalledPackages = @(
+    Get-AppxPackage -ErrorAction SilentlyContinue
+)
+
+# Create a case-insensitive lookup table containing
+# Package Family Names.
+$InstalledFamilyNames = @{}
+
+foreach ($Package in $InstalledPackages) {
+
+    if (-not [string]::IsNullOrWhiteSpace($Package.PackageFamilyName)) {
+
+        $FamilyName = $Package.PackageFamilyName.ToLowerInvariant()
+
+        $InstalledFamilyNames[$FamilyName] = $true
+    }
+}
+
+Write-Host "Registered packages found: $($InstalledPackages.Count)"
+Write-Host ""
+
+# ------------------------------------------------------------
+# Scan ONLY the Packages directory
+# ------------------------------------------------------------
+
+Write-Host "Scanning package folders..." -ForegroundColor Yellow
+Write-Host ""
+
+$Folders = @(
+    Get-ChildItem `
+        -LiteralPath $PackagesPath `
+        -Directory `
+        -Force `
+        -ErrorAction SilentlyContinue
+)
+
+$PotentialOrphans = New-Object System.Collections.Generic.List[object]
+
+foreach ($Folder in $Folders) {
+
+    $FolderName = $Folder.Name
+    $FolderKey  = $FolderName.ToLowerInvariant()
+
+    # --------------------------------------------------------
+    # The normal AppX folder name corresponds to the package
+    # family name, e.g.
+    #
+    # Microsoft.WindowsStore_8wekyb3d8bbwe
+    #
+    # --------------------------------------------------------
+
+    if (-not $InstalledFamilyNames.ContainsKey($FolderKey)) {
+
+        # Calculate folder size.
+        # Errors are ignored because some package files may
+        # be inaccessible.
+        $SizeBytes = 0
+
+        try {
+            $SizeBytes = (
+                Get-ChildItem `
+                    -LiteralPath $Folder.FullName `
+                    -File `
+                    -Recurse `
+                    -Force `
+                    -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum
+            ).Sum
+
+            if ($null -eq $SizeBytes) {
+                $SizeBytes = 0
+            }
+        }
+        catch {
+            $SizeBytes = 0
+        }
+
+        $SizeMB = [math]::Round(
+            ($SizeBytes / 1MB),
+            2
+        )
+
+        $PotentialOrphans.Add(
+            [PSCustomObject]@{
+                FolderName = $FolderName
+                SizeMB     = $SizeMB
+                FullPath   = $Folder.FullName
+                Status     = "NOT CURRENTLY REGISTERED"
+            }
+        )
+    }
+}
+
+# ------------------------------------------------------------
+# Sort largest folders first
+# ------------------------------------------------------------
+
+$PotentialOrphans = @(
+    $PotentialOrphans |
+    Sort-Object -Property SizeMB -Descending
+)
+
+# ------------------------------------------------------------
+# Console output
+# ------------------------------------------------------------
+
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host " Scan Results" -ForegroundColor Cyan
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host ""
+
+Write-Host "Folders scanned:       $($Folders.Count)"
+Write-Host "Registered packages:   $($InstalledPackages.Count)"
+Write-Host "Potential leftovers:   $($PotentialOrphans.Count)"
+Write-Host ""
+
+if ($PotentialOrphans.Count -eq 0) {
+
+    Write-Host "No potential orphaned folders were found." `
+        -ForegroundColor Green
+
+}
+else {
+
+    $PotentialOrphans |
+        Format-Table `
+            FolderName,
+            @{Name="Size (MB)";Expression={$_.SizeMB}},
+            Status `
+            -AutoSize
+}
+
+# ------------------------------------------------------------
+# Generate report
+# ------------------------------------------------------------
+
+$Report = New-Object System.Collections.Generic.List[string]
+
+$Report.Add("============================================================")
+$Report.Add(" AppData\Local\Packages - Orphaned Package Report")
+$Report.Add("============================================================")
+$Report.Add("")
+$Report.Add("Generated: $(Get-Date)")
+$Report.Add("")
+$Report.Add("Packages directory:")
+$Report.Add($PackagesPath)
+$Report.Add("")
+$Report.Add("Folders scanned:     $($Folders.Count)")
+$Report.Add("Registered packages: $($InstalledPackages.Count)")
+$Report.Add("Potential leftovers: $($PotentialOrphans.Count)")
+$Report.Add("")
+$Report.Add("IMPORTANT:")
+$Report.Add("This is an identification report only.")
+$Report.Add("Nothing was deleted or modified.")
+$Report.Add("")
+$Report.Add("A folder appearing below means its folder name does not")
+$Report.Add("match a Package Family Name currently registered for")
+$Report.Add("this Windows user.")
+$Report.Add("")
+$Report.Add("============================================================")
+$Report.Add(" Potential Orphaned Folders")
+$Report.Add("============================================================")
+$Report.Add("")
+
+if ($PotentialOrphans.Count -eq 0) {
+
+    $Report.Add("No potential orphaned folders were detected.")
+
+}
+else {
+
+    foreach ($Item in $PotentialOrphans) {
+
+        $Report.Add("Folder : $($Item.FolderName)")
+        $Report.Add("Size   : $($Item.SizeMB) MB")
+        $Report.Add("Path   : $($Item.FullPath)")
+        $Report.Add("Status : $($Item.Status)")
+        $Report.Add("")
+    }
+}
+
+$Report.Add("============================================================")
+$Report.Add(" End of Report")
+$Report.Add("============================================================")
+
+$Report |
+    Out-File `
+        -LiteralPath $ReportPath `
+        -Encoding UTF8 `
+        -Force
+
+Write-Host ""
+Write-Host "Report created:" -ForegroundColor Green
+Write-Host $ReportPath -ForegroundColor White
+Write-Host ""
+
+Write-Host "Nothing was deleted or modified." -ForegroundColor Green
+Write-Host ""
+
+Read-Host "Press Enter to exit"
