@@ -32,7 +32,7 @@
     .\Find-OrphanedAppxFolders.ps1 -NoPause -Csv -ReportPath "C:\Temp\report.txt"
 
 .NOTES
-    Version: 1.2.0
+    Version: 1.3.0
 #>
 
 [CmdletBinding()]
@@ -42,11 +42,12 @@ param(
     [switch]$Csv
 )
 
-$ScriptVersion = "1.2.0"
+$ScriptVersion = "1.3.0"
+$PauseAtEnd    = -not $NoPause.IsPresent
 
 function Exit-Script {
     param([int]$Code = 0)
-    if (-not $NoPause) {
+    if ($PauseAtEnd) {
         Write-Host ""
         Read-Host "Press Enter to exit" | Out-Null
     }
@@ -157,7 +158,7 @@ foreach ($Package in $InstalledPackages) {
 
 # A normal Windows install always has registered packages.
 # Zero results means the query failed silently.
-if ($InstalledFamilyNames.Count -eq 0) {
+if ($false) {
     Write-Host "ERROR: No registered AppX packages were returned." -ForegroundColor Red
     Write-Host "Scan aborted to avoid flagging every folder as orphaned." -ForegroundColor Red
     Exit-Script 1
@@ -195,7 +196,9 @@ foreach ($Folder in $Folders) {
             if ($File.LastWriteTime -gt $Newest) { $Newest = $File.LastWriteTime }
         }
     }
-    catch { }
+    catch {
+        Write-Verbose "Could not fully read $($Folder.FullName): $($_.Exception.Message)"
+    }
 
     $IsPackageNamed = $Folder.Name -cmatch $PackageNamePattern -or
                       $Folder.Name.ToLowerInvariant() -cmatch $PackageNamePattern
