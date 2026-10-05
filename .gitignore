@@ -4,3 +4,6 @@ out/
 # Reports from local test runs
 Orphaned-Appx-Packages.txt
 Orphaned-Appx-Packages.csv
+
+# Downloaded zips
+*.zip

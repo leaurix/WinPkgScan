@@ -1,6 +1,6 @@
 # WinPkgScan
 
-![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/leaurix/WinPkgScan/actions/workflows/ci.yml/badge.svg)
 
 A read-only PowerShell script that finds leftover app folders in `%LOCALAPPDATA%\Packages` whose app is no longer installed for the current Windows user.
 
