@@ -1,5 +1,7 @@
 # WinPkgScan
 
+![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)
+
 A read-only PowerShell script that finds leftover app folders in `%LOCALAPPDATA%\Packages` whose app is no longer installed for the current Windows user.
 
 It lists each folder with its size and last-modified date, and saves a report to your Desktop. **It never deletes, uninstalls or modifies anything.**
@@ -33,7 +35,7 @@ When a Microsoft Store (AppX/MSIX) app is removed, its data folder in `AppData\L
 | `Run-Scan.bat` | Double-click launcher. Shows results and waits for Enter. |
 | `Run-Scan-Unattended.bat` | For Task Scheduler or other scripts. No prompt, returns an exit code. |
 
-Keep all three files in the same folder.
+Keep all three files in the same folder. The other files (`tests/`, `build.ps1`, `.github/`) are only for development.
 
 ## Usage
 
@@ -100,6 +102,26 @@ Status        : NOT CURRENTLY REGISTERED
 ## Safety
 
 This tool only reads and reports. Any cleanup is your decision and your responsibility. Back up or move a folder before deleting it if you are unsure. An old last-modified date is a good sign a folder is unused, but it is not proof.
+
+## Development
+
+Install the tools once:
+
+```powershell
+Install-Module PSScriptAnalyzer, Pester -Scope CurrentUser -Force -SkipPublisherCheck
+```
+
+Run lint and tests:
+
+```powershell
+./build.ps1              # lint + tests
+./build.ps1 -Task Lint   # PSScriptAnalyzer only
+./build.ps1 -Task Test   # Pester only
+```
+
+- **Unit tests** mock `Get-AppxPackage` and use a fake Packages folder, so they run on any OS.
+- **Integration tests** (tag `Integration`) run only on Windows. They scan the real user packages and run `Run-Scan-Unattended.bat`.
+- **CI** (`.github/workflows/ci.yml`) runs on every push and pull request: lint on Ubuntu, tests on Windows with PowerShell 5.1 and 7. Test results are uploaded as a build artifact.
 
 ## License
 

@@ -3,6 +3,18 @@
 All notable changes to this project are listed here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-10-05
+
+### Added
+- Pester test suite (`tests/`): unit tests with mocked AppX data, plus Windows-only integration tests that run the real `Get-AppxPackage` and `Run-Scan-Unattended.bat`.
+- PSScriptAnalyzer lint with `PSScriptAnalyzerSettings.psd1`.
+- `build.ps1` to run lint and tests locally or in CI.
+- GitHub Actions workflow: lint on Ubuntu, tests on Windows with PowerShell 5.1 and 7.
+- `.gitignore`.
+
+### Fixed
+- Lint findings: inaccessible folders are now logged with `-Verbose` instead of being silently ignored.
+
 ## [1.2.0] - 2026-10-05
 
 ### Added

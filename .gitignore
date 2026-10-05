@@ -1,0 +1,6 @@
+# Build and test output
+out/
+
+# Reports from local test runs
+Orphaned-Appx-Packages.txt
+Orphaned-Appx-Packages.csv
