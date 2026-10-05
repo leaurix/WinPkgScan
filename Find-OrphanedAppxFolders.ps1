@@ -158,7 +158,7 @@ foreach ($Package in $InstalledPackages) {
 
 # A normal Windows install always has registered packages.
 # Zero results means the query failed silently.
-if ($false) {
+if ($InstalledFamilyNames.Count -eq 0) {
     Write-Host "ERROR: No registered AppX packages were returned." -ForegroundColor Red
     Write-Host "Scan aborted to avoid flagging every folder as orphaned." -ForegroundColor Red
     Exit-Script 1
