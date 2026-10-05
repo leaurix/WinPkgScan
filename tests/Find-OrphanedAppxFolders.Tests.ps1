@@ -22,8 +22,11 @@ BeforeAll {
 
     # Get-AppxPackage only exists on Windows. Pester can only mock a command
     # that exists, so add a stub where it is missing.
+    # The stub is removed again before the real Windows run.
+    $script:CreatedStub = $false
     if (-not (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue)) {
         function global:Get-AppxPackage { [CmdletBinding()] param() }
+        $script:CreatedStub = $true
     }
 
     # Runs the scanner quietly and returns its exit code.
@@ -223,6 +226,12 @@ Describe 'Real Windows run' -Tag 'Integration' -Skip:(-not $HasPackages) {
 
     BeforeAll {
         $env:LOCALAPPDATA = $script:SavedLocalAppData
+
+        # A global stub function would take priority over the real
+        # Get-AppxPackage cmdlet, so remove it before running for real.
+        if ($script:CreatedStub) {
+            Remove-Item -Path Function:\global:Get-AppxPackage -ErrorAction SilentlyContinue
+        }
     }
 
     It 'scans the current user with the real Get-AppxPackage' {
@@ -238,7 +247,9 @@ Describe 'Real Windows run' -Tag 'Integration' -Skip:(-not $HasPackages) {
     It 'runs through Run-Scan-Unattended.bat' {
         $report = Join-Path $TestDrive 'bat.txt'
         $bat    = Join-Path $RepoRoot 'Run-Scan-Unattended.bat'
-        & cmd.exe /c "`"$bat`" -ReportPath `"$report`"" | Out-Null
+        # Call the .bat directly. PowerShell runs it through cmd.exe and
+        # quotes the arguments correctly.
+        & $bat -ReportPath $report | Out-Null
         $LASTEXITCODE | Should -Be 0
         $report | Should -Exist
     }
