@@ -24,6 +24,8 @@
 
 .PARAMETER Csv
     Also save the results as a CSV file next to the text report.
+    The CSV has an empty Delete column: type Yes on the rows to remove,
+    then run Remove-OrphanedAppxFolders.ps1.
 
 .EXAMPLE
     .\Find-OrphanedAppxFolders.ps1
@@ -32,7 +34,7 @@
     .\Find-OrphanedAppxFolders.ps1 -NoPause -Csv -ReportPath "C:\Temp\report.txt"
 
 .NOTES
-    Version: 1.3.0
+    Version: 1.4.0
 #>
 
 [CmdletBinding()]
@@ -42,7 +44,7 @@ param(
     [switch]$Csv
 )
 
-$ScriptVersion = "1.3.0"
+$ScriptVersion = "1.4.0"
 $PauseAtEnd    = -not $NoPause.IsPresent
 
 function Exit-Script {
@@ -308,7 +310,7 @@ try {
 
     if ($Csv) {
         @($Orphans) + @($Others) |
-            Select-Object Category, FolderName, SizeMB, LastModified, FullPath, Status |
+            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status |
             Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8 -Force -ErrorAction Stop
         Write-Host "CSV created:" -ForegroundColor Green
         Write-Host $CsvPath -ForegroundColor White

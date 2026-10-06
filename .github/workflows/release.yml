@@ -1,0 +1,44 @@
+name: Release
+
+# Runs when a version tag is pushed, e.g.:
+#   git tag v1.3.0
+#   git push origin v1.3.0
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Publish GitHub release
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release zip
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ./build.ps1 -Task Package -Tag $env:TAG
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            "out/WinPkgScan-$TAG.zip" \
+            "out/WinPkgScan-$TAG.zip.sha256" \
+            --title "WinPkgScan $TAG" \
+            --notes-file out/release-notes.md \
+            --verify-tag
