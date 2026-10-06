@@ -3,13 +3,33 @@
 All notable changes to this project are listed here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
-## [1.3.0] - 2026-10-05
+## [1.4.0] - 2026-10-06
+
+### Added
+- `Remove-OrphanedAppxFolders.ps1`: deletes only the folders marked `Yes` in the Delete column of the scanner's CSV.
+  - Moves folders to the Recycle Bin by default. `-Permanent` deletes them instead.
+  - Asks before each folder. `-WhatIf` previews without changing anything. `-Force` skips the prompts for unattended runs.
+  - Re-checks every folder before deleting: it must be directly inside the current user's Packages folder, match its CSV row, still exist, not be or contain a link or junction, not be registered to an installed app, be package-named (unless `-IncludeOtherFolders`), and not be modified in the last 30 days (`-MinAgeDays`).
+  - Stops without deleting anything if the installed package list cannot be read.
+  - Writes a log CSV of every action and reports the space freed.
+  - Reads CSVs saved by Excel with `;` as the separator.
+- `Run-Delete.bat`: double-click, or drag a CSV onto it.
+- Pester tests for every delete safety check, plus Windows tests for the Recycle Bin and the batch files.
+
+### Changed
+- The scanner CSV has a new empty `Delete` column as its first column.
+- `Run-Scan.bat` now always saves the CSV, so scan, review and delete work by double-click.
+- The release zip includes `Remove-OrphanedAppxFolders.ps1` and `Run-Delete.bat`.
+
+## [1.3.0] - 2026-10-06
 
 ### Added
 - Pester test suite (`tests/`): unit tests with mocked AppX data, plus Windows-only integration tests that run the real `Get-AppxPackage` and `Run-Scan-Unattended.bat`.
 - PSScriptAnalyzer lint with `PSScriptAnalyzerSettings.psd1`.
 - `build.ps1` to run lint and tests locally or in CI.
 - GitHub Actions workflow: lint on Ubuntu, tests on Windows with PowerShell 5.1 and 7.
+- Release workflow: pushing a version tag runs CI, then publishes a GitHub Release with a ready-to-use zip and its SHA256 checksum.
+- `build.ps1 -Task Package`: builds the release zip and checks the tag matches the script version, the CHANGELOG has a section for it, and the scripts have CRLF line endings.
 - `.gitignore`.
 
 ### Fixed

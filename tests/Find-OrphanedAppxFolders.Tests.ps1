@@ -132,6 +132,11 @@ Describe 'Scanning (mocked AppX packages)' {
             $CsvPath    | Should -Exist
         }
 
+        It 'puts an empty Delete column first in the CSV' {
+            $Rows[0].PSObject.Properties.Name[0] | Should -Be 'Delete'
+            @($Rows | Where-Object { $_.Delete -ne '' }).Count | Should -Be 0
+        }
+
         It 'ignores registered folders, including different letter case' {
             $Rows.FolderName | Should -Not -Contain 'Microsoft.WindowsStore_8wekyb3d8bbwe'
             $Rows.FolderName | Should -Not -Contain 'MICROSOFT.PHOTOS_8wekyb3d8bbwe'

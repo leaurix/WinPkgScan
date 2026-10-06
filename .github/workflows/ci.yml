@@ -2,8 +2,15 @@ name: CI
 
 on:
   push:
+    # Branches only. Tag pushes run this workflow through release.yml instead.
+    branches: ['**']
   pull_request:
   workflow_dispatch:
+  # Lets release.yml run the same lint and tests before publishing.
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   lint:
