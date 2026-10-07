@@ -12,6 +12,9 @@
       - The FolderName and FullPath columns must match.
       - It must still exist and must not be a link or junction.
       - It must not be registered to an installed app right now.
+      - It must not match an exclude pattern.
+      - It must not be a Windows component (_cw5n1h2txyewy or
+        windows_ie_ac_*), unless -IncludeWindowsComponents.
       - It must be package-named (Name_publisherid), unless -IncludeOtherFolders.
       - It must not contain any links or junctions.
       - Nothing in it may have changed in the last -MinAgeDays days.
@@ -34,6 +37,17 @@
 .PARAMETER IncludeOtherFolders
     Also allow folders that are not package-named (the scanner's
     "Other folders"). These are often used by Windows itself.
+
+.PARAMETER IncludeWindowsComponents
+    Also allow Windows component folders (publisher _cw5n1h2txyewy, or
+    windows_ie_ac_*). Not recommended: these belong to Windows.
+
+.PARAMETER Exclude
+    Folder names never to delete. Wildcards allowed.
+
+.PARAMETER ExcludeFile
+    A text file with one exclude pattern per line (# starts a comment).
+    Defaults to WinPkgScan.exclude.txt next to this script.
 
 .PARAMETER LogPath
     Where to save the log CSV. Defaults to a timestamped file next to the
@@ -58,7 +72,7 @@
     Unattended run: no prompts.
 
 .NOTES
-    Version: 1.4.0
+    Version: 1.5.0
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -73,6 +87,12 @@ param(
 
     [switch]$IncludeOtherFolders,
 
+    [switch]$IncludeWindowsComponents,
+
+    [string[]]$Exclude,
+
+    [string]$ExcludeFile,
+
     [string]$LogPath,
 
     [switch]$Force,
@@ -80,7 +100,7 @@ param(
     [switch]$NoPause
 )
 
-$ScriptVersion = "1.4.0"
+$ScriptVersion = "1.5.0"
 $PauseAtEnd    = -not $NoPause.IsPresent
 
 # -Force skips the per-folder prompt, unless -Confirm was given explicitly.
@@ -122,7 +142,49 @@ function Test-MarkedForDelete {
     return $Value.Trim() -match '^(yes|y|true|1|x)$'
 }
 
+function Get-ExcludePattern {
+    # Patterns from -Exclude plus the exclude file (one per line, # = comment).
+    param([string[]]$FromParameter, [string]$File, [bool]$FileWasGiven)
+    $patterns = New-Object System.Collections.Generic.List[string]
+    foreach ($p in @($FromParameter)) {
+        if (-not [string]::IsNullOrWhiteSpace($p)) { $patterns.Add($p.Trim()) }
+    }
+    if (Test-Path -LiteralPath $File -PathType Leaf) {
+        foreach ($line in (Get-Content -LiteralPath $File)) {
+            $t = $line.Trim()
+            if ($t -and -not $t.StartsWith('#')) { $patterns.Add($t) }
+        }
+    }
+    elseif ($FileWasGiven) {
+        Write-Host "WARNING: Exclude file not found: $File" -ForegroundColor Yellow
+    }
+    return , $patterns.ToArray()
+}
+
+function Get-MatchingPattern {
+    param([string]$Name, [string[]]$Patterns)
+    foreach ($p in $Patterns) {
+        if ($Name -like $p) { return $p }
+    }
+    return $null
+}
+
+function Test-WindowsComponent {
+    param([string]$Name)
+    $n = $Name.ToLowerInvariant()
+    return $n.EndsWith('_cw5n1h2txyewy') -or $n -like 'windows_ie_ac_*'
+}
+
 $PackagesPath = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "Packages"))
+
+if ([string]::IsNullOrWhiteSpace($ExcludeFile)) {
+    $ExcludeFile = Join-Path $PSScriptRoot "WinPkgScan.exclude.txt"
+    $ExcludeFileGiven = $false
+}
+else {
+    $ExcludeFileGiven = $true
+}
+$ExcludePatterns = Get-ExcludePattern -FromParameter $Exclude -File $ExcludeFile -FileWasGiven $ExcludeFileGiven
 
 # Package folders end in "_" + a 13-character publisher ID.
 $PackageNamePattern = '^.+_[0-9a-hjkmnp-tv-z]{13}$'
@@ -146,6 +208,8 @@ Write-Host "CSV:            $CsvPath"
 Write-Host "Mode:           $Mode" -ForegroundColor $(if ($Permanent) { 'Red' } else { 'White' })
 Write-Host "Skip if newer:  $(if ($MinAgeDays -gt 0) { "$MinAgeDays days" } else { 'off' })"
 Write-Host "Other folders:  $(if ($IncludeOtherFolders) { 'allowed' } else { 'skipped' })"
+Write-Host "Windows parts:  $(if ($IncludeWindowsComponents) { 'ALLOWED' } else { 'skipped' })" -ForegroundColor $(if ($IncludeWindowsComponents) { 'Red' } else { 'White' })
+Write-Host "Exclusions:     $(if ($ExcludePatterns.Count -gt 0) { $ExcludePatterns -join ', ' } else { 'none' })"
 if ($WhatIfPreference) {
     Write-Host "WhatIf:         on (nothing will be deleted)" -ForegroundColor Yellow
 }
@@ -287,10 +351,18 @@ foreach ($Row in $Marked) {
         }
     }
 
-    # 3. Must not belong to an installed app, and must be package-named.
+    # 3. Must not belong to an installed app, be excluded, be a Windows
+    #    component, or (by default) be a non-package folder.
     if (-not $action) {
+        $excludedBy = Get-MatchingPattern -Name $item.Name -Patterns $ExcludePatterns
         if ($InstalledFamilyNames.Contains($item.Name)) {
             $action = "Skipped"; $reason = "Registered to an installed app"
+        }
+        elseif ($excludedBy) {
+            $action = "Skipped"; $reason = "Excluded by pattern '$excludedBy'"
+        }
+        elseif (-not $IncludeWindowsComponents -and (Test-WindowsComponent $item.Name)) {
+            $action = "Skipped"; $reason = "Windows component (keep)"
         }
         elseif (-not $IncludeOtherFolders -and $item.Name.ToLowerInvariant() -notmatch $PackageNamePattern) {
             $action = "Skipped"; $reason = "Not a package-named folder (use -IncludeOtherFolders)"

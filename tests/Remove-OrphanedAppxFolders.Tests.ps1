@@ -34,7 +34,12 @@ BeforeAll {
     $script:OrphanA   = 'Contoso.Old_abc123def4567'
     $script:OrphanB   = 'Fabrikam.Gone_8wekyb3d8bbwe'
     $script:Installed = 'Microsoft.WindowsStore_8wekyb3d8bbwe'
-    $script:Other     = 'windows_ie_ac_001'
+    $script:Other     = 'SomeTool_Cache'
+    $script:WinPart   = 'Microsoft.Windows.OldPart_cw5n1h2txyewy'
+    $script:IeFolder  = 'windows_ie_ac_001'
+
+    $script:EmptyExclude = Join-Path $TestDrive 'empty.exclude.txt'
+    Set-Content -LiteralPath $script:EmptyExclude -Value ''
     $script:OldDate   = [datetime]'2024-03-15'
 
     function New-PackageFolder {
@@ -87,6 +92,7 @@ BeforeAll {
     function Invoke-Remove {
         param([hashtable]$Params = @{})
         $Params['NoPause'] = $true
+        if (-not $Params.ContainsKey('ExcludeFile')) { $Params['ExcludeFile'] = $script:EmptyExclude }
         if (-not $Params.ContainsKey('CsvPath')) { $Params['CsvPath'] = $script:CsvPath }
         if (-not $Params.ContainsKey('LogPath')) { $Params['LogPath'] = $script:LogPath }
         if (-not ($Params.ContainsKey('WhatIf') -or $Params.ContainsKey('Confirm') -or $Params.ContainsKey('Force'))) {
@@ -255,6 +261,41 @@ Describe 'Removing (mocked AppX packages)' {
             $DirOther | Should -Not -Exist
         }
 
+        It 'skips a Windows component (<Name>) even with -IncludeOtherFolders' -TestCases @(
+            @{ Name = 'Microsoft.Windows.OldPart_cw5n1h2txyewy' }, @{ Name = 'windows_ie_ac_001' }
+        ) {
+            param($Name)
+            $dir = New-PackageFolder -Name $Name
+            New-TestCsv -Rows @(@{ Name = $Name; Delete = 'Yes' })
+            $r = Invoke-Remove @{ Permanent = $true; IncludeOtherFolders = $true }
+            $dir | Should -Exist
+            (Get-LogRow $r $Name).Reason | Should -Match 'Windows component'
+        }
+
+        It 'deletes a Windows component only with -IncludeWindowsComponents' {
+            $dir = New-PackageFolder -Name $WinPart
+            New-TestCsv -Rows @(@{ Name = $WinPart; Delete = 'Yes' })
+            (Invoke-Remove @{ Permanent = $true; IncludeWindowsComponents = $true }).ExitCode | Should -Be 0
+            $dir | Should -Not -Exist
+        }
+
+        It 'skips a folder matching -Exclude, even when marked' {
+            New-TestCsv -Marked $OrphanA, $OrphanB
+            $r = Invoke-Remove @{ Permanent = $true; Exclude = @('contoso.*') }
+            $DirA | Should -Exist
+            $DirB | Should -Not -Exist
+            (Get-LogRow $r $OrphanA).Reason | Should -Match "Excluded by pattern 'contoso\.\*'"
+        }
+
+        It 'skips a folder matching the exclude file' {
+            $file = Join-Path $WorkDir 'my.exclude.txt'
+            Set-Content -LiteralPath $file -Value @('# keep this one', 'Fabrikam.*')
+            New-TestCsv -Marked $OrphanA, $OrphanB
+            Invoke-Remove @{ Permanent = $true; ExcludeFile = $file } | Out-Null
+            $DirA | Should -Not -Exist
+            $DirB | Should -Exist
+        }
+
         It 'skips a folder modified within -MinAgeDays' {
             $recent = New-PackageFolder -Name 'Recent.App_abc123def4567' -Modified (Get-Date).AddDays(-5)
             New-TestCsv -Rows @(@{ Name = 'Recent.App_abc123def4567'; Delete = 'Yes' })
@@ -391,7 +432,7 @@ Describe 'Removing (mocked AppX packages)' {
 
         It 'scans, marks one row, and deletes only that folder' {
             $report = Join-Path $WorkDir 'Orphaned-Appx-Packages.txt'
-            & $ScanPath -NoPause -Csv -ReportPath $report 6>&1 | Out-Null
+            & $ScanPath -NoPause -Csv -ReportPath $report -ExcludeFile $EmptyExclude 6>&1 | Out-Null
             $LASTEXITCODE | Should -Be 0
 
             $scanCsv = [System.IO.Path]::ChangeExtension($report, '.csv')

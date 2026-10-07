@@ -3,6 +3,20 @@
 All notable changes to this project are listed here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-10-07
+
+### Added
+- **HTML report** (`-Html`): a sortable, searchable report with summary tiles, in light and dark mode. `-Open` opens it in your browser.
+- **Exclusions:** `-Exclude` (wildcards) and a `WinPkgScan.exclude.txt` file next to the scripts. Excluded folders are left out of the scan and are never deleted by the remover.
+- **Windows component protection:** folders from the Windows publisher (`_cw5n1h2txyewy`) and `windows_ie_ac_*` are shown in their own "Windows components (keep)" group. The remover skips them unless `-IncludeWindowsComponents` is used.
+- `-ExcludeFile` on both scripts to use a different exclude file.
+- Tests for exclusions, Windows components and the HTML report.
+
+### Changed
+- `Run-Scan.bat` also saves the HTML report, and opens it when double-clicked.
+- The scanner summary, report and CSV include the new Windows components group and the excluded count.
+- The release zip includes `WinPkgScan.exclude.txt`.
+
 ## [1.4.0] - 2026-10-06
 
 ### Added

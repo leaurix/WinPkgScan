@@ -29,10 +29,16 @@ BeforeAll {
         $script:CreatedStub = $true
     }
 
+    # An empty exclude file, so the repo's WinPkgScan.exclude.txt never
+    # changes test results.
+    $script:EmptyExclude = Join-Path $TestDrive 'empty.exclude.txt'
+    Set-Content -LiteralPath $script:EmptyExclude -Value ''
+
     # Runs the scanner quietly and returns its exit code.
     function Invoke-Scan {
         param([hashtable]$Params = @{})
         $Params['NoPause'] = $true
+        if (-not $Params.ContainsKey('ExcludeFile')) { $Params['ExcludeFile'] = $script:EmptyExclude }
         & $script:ScriptPath @Params 6>&1 | Out-Null
         return $LASTEXITCODE
     }
@@ -111,8 +117,10 @@ Describe 'Scanning (mocked AppX packages)' {
         # Orphaned package folders
         New-PackageFolder -Name 'Contoso.Old_abc123def4567'   -Bytes 3MB -Modified ([datetime]'2024-03-15')
         New-PackageFolder -Name 'Fabrikam.Gone_8wekyb3d8bbwe' -Bytes 1MB
-        # Other folders (not package-named)
+        # Windows components
         New-PackageFolder -Name 'windows_ie_ac_001' -Bytes 2MB
+        New-PackageFolder -Name 'Microsoft.Windows.OldPart_cw5n1h2txyewy'
+        # Other folders (not package-named)
         New-PackageFolder -Name 'Bad.Name_ABCIL'
     }
 
@@ -148,9 +156,15 @@ Describe 'Scanning (mocked AppX packages)' {
             $orphans.Status | Should -Be @('NOT CURRENTLY REGISTERED', 'NOT CURRENTLY REGISTERED')
         }
 
+        It 'classifies Windows components separately, and marks them keep' {
+            $win = @($Rows | Where-Object Category -eq 'Windows component')
+            $win.FolderName | Should -Be @('windows_ie_ac_001', 'Microsoft.Windows.OldPart_cw5n1h2txyewy')
+            $win.Status | Should -Be @('WINDOWS COMPONENT (KEEP)', 'WINDOWS COMPONENT (KEEP)')
+        }
+
         It 'classifies other folders separately' {
             $others = @($Rows | Where-Object Category -eq 'Other folder')
-            $others.FolderName | Should -Be @('windows_ie_ac_001', 'Bad.Name_ABCIL')
+            $others.FolderName | Should -Be @('Bad.Name_ABCIL')
         }
 
         It 'reports sizes in MB, largest first' {
@@ -166,7 +180,9 @@ Describe 'Scanning (mocked AppX packages)' {
             $report = Get-Content -LiteralPath $ReportPath -Raw
             $report | Should -Match 'Registered packages:\s+2'
             $report | Should -Match 'Orphaned package folders:\s+2 \(4 MB\)'
-            $report | Should -Match 'Other folders:\s+2 \(2 MB\)'
+            $report | Should -Match 'Windows components:\s+2 \(2 MB\)'
+            $report | Should -Match 'Other folders:\s+1 \(0 MB\)'
+            $report | Should -Match 'Excluded:\s+0'
             $report | Should -Match 'Nothing was deleted or modified'
         }
     }
@@ -180,6 +196,61 @@ Describe 'Scanning (mocked AppX packages)' {
         $after = Get-ChildItem -LiteralPath $PackagesDir -Recurse -Force |
             ForEach-Object { '{0}|{1}|{2}' -f $_.FullName, $_.Length, $_.LastWriteTimeUtc.Ticks }
         $after | Should -Be $before
+    }
+
+    Context 'exclusions' {
+
+        It 'leaves out folders matching -Exclude wildcards' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; Exclude = @('Contoso.*', '*_ABCIL') } | Should -Be 0
+            $rows = @(Import-Csv -LiteralPath $CsvPath)
+            $rows.FolderName | Should -Not -Contain 'Contoso.Old_abc123def4567'
+            $rows.FolderName | Should -Not -Contain 'Bad.Name_ABCIL'
+            $rows.FolderName | Should -Contain 'Fabrikam.Gone_8wekyb3d8bbwe'
+            (Get-Content -LiteralPath $ReportPath -Raw) | Should -Match 'Excluded:\s+2'
+        }
+
+        It 'reads patterns from the exclude file, ignoring comments and blank lines' {
+            $file = Join-Path $OutDir 'my.exclude.txt'
+            New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
+            Set-Content -LiteralPath $file -Value @('# a comment', '', '  fabrikam.*  ', '#Contoso.*')
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; ExcludeFile = $file } | Should -Be 0
+            $rows = @(Import-Csv -LiteralPath $CsvPath)
+            $rows.FolderName | Should -Not -Contain 'Fabrikam.Gone_8wekyb3d8bbwe'
+            $rows.FolderName | Should -Contain 'Contoso.Old_abc123def4567'
+        }
+
+        It 'still runs when the given exclude file does not exist' {
+            Invoke-Scan @{ ReportPath = $ReportPath; ExcludeFile = (Join-Path $OutDir 'missing.txt') } | Should -Be 0
+        }
+
+        It 'ships an exclude file that has no active patterns' {
+            $shipped = Join-Path $RepoRoot 'WinPkgScan.exclude.txt'
+            $shipped | Should -Exist
+            @(Get-Content -LiteralPath $shipped | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') }).Count | Should -Be 0
+        }
+    }
+
+    Context 'HTML report' {
+
+        It 'writes an HTML report with every section when -Html is used' {
+            New-PackageFolder -Name 'Amp&Co_abc123def4567'
+            Invoke-Scan @{ ReportPath = $ReportPath; Html = $true } | Should -Be 0
+            $htmlPath = [System.IO.Path]::ChangeExtension($ReportPath, '.html')
+            $htmlPath | Should -Exist
+            $html = Get-Content -LiteralPath $htmlPath -Raw
+            $html | Should -Match '<!doctype html>'
+            $html | Should -Match 'Contoso\.Old_abc123def4567'
+            $html | Should -Match 'Orphaned package folders'
+            $html | Should -Match 'Windows components'
+            $html | Should -Match 'Other folders'
+            $html | Should -Match 'Amp&amp;Co_abc123def4567'
+            $html | Should -Not -Match 'Amp&Co_'
+        }
+
+        It 'does not write an HTML report without -Html' {
+            Invoke-Scan @{ ReportPath = $ReportPath } | Should -Be 0
+            [System.IO.Path]::ChangeExtension($ReportPath, '.html') | Should -Not -Exist
+        }
     }
 
     It 'does not write a CSV without -Csv' {
