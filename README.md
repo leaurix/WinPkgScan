@@ -230,6 +230,8 @@ Run lint and tests:
 
 The **Release** workflow (`.github/workflows/release.yml`) then runs the full CI. If CI passes, it builds the zip (both scripts, the three batch files, the exclude file, README and LICENSE) and a SHA256 checksum, and publishes a GitHub Release. The release notes come from the CHANGELOG. The release fails if the tag does not match the script version or the CHANGELOG has no section for it.
 
+Do not create the release by hand on GitHub: the workflow makes it. If one was made by hand anyway, or a release run failed, go to **Actions > Release > Run workflow**, enter the tag (e.g. `v1.5.0`), and run it. It attaches the zip and checksum to the existing release and replaces its title and notes.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
