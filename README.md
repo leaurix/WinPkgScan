@@ -5,7 +5,7 @@
 
 Finds leftover app folders in `%LOCALAPPDATA%\Packages` whose app is no longer installed for the current Windows user, and lets you remove the ones you choose.
 
-- **The scanner is read-only.** It lists each folder with its size and last-modified date, and saves a report and a CSV to your Desktop.
+- **The scanner is read-only.** It lists each folder with its size and last-modified date, and saves a text report, a CSV and a sortable HTML report to your Desktop.
 - **The remover deletes only the folders you mark** in that CSV. It moves them to the Recycle Bin by default and asks before each one.
 
 ## Download
@@ -17,7 +17,7 @@ Finds leftover app folders in `%LOCALAPPDATA%\Packages` whose app is no longer i
 Optional: check the download is intact. The hash must match the `.sha256` file on the release page.
 
 ```powershell
-Get-FileHash .\WinPkgScan-v1.4.0.zip -Algorithm SHA256
+Get-FileHash .\WinPkgScan-v1.5.0.zip -Algorithm SHA256
 ```
 
 ## Why
@@ -26,7 +26,7 @@ When a Microsoft Store (AppX/MSIX) app is removed, its data folder in `AppData\L
 
 ## Quick start
 
-1. **Scan:** double-click `Run-Scan.bat`. It saves `Orphaned-Appx-Packages.txt` and `Orphaned-Appx-Packages.csv` to your Desktop.
+1. **Scan:** double-click `Run-Scan.bat`. It saves `Orphaned-Appx-Packages.txt`, `.csv` and `.html` to your Desktop, and opens the HTML report.
 2. **Review:** open the CSV in Excel. Type `Yes` in the **Delete** column for each folder to remove. Save it as CSV, then close Excel.
 3. **Preview:** open PowerShell in the WinPkgScan folder and run `.\Run-Delete.bat -WhatIf`. Nothing is changed.
 4. **Remove:** double-click `Run-Delete.bat`. Answer `Y` for each folder, or `A` for all.
@@ -37,11 +37,13 @@ When a Microsoft Store (AppX/MSIX) app is removed, its data folder in `AppData\L
 1. Reads all AppX packages registered for the current user (`Get-AppxPackage`).
 2. Lists every folder in `%LOCALAPPDATA%\Packages`.
 3. Skips any folder whose name matches a registered Package Family Name (case-insensitive), e.g. `Microsoft.WindowsStore_8wekyb3d8bbwe`.
-4. Sorts the remaining folders into two groups:
+4. Leaves out folders matching your exclude patterns.
+5. Sorts the remaining folders into three groups:
    - **Orphaned package folders:** named like a package (`Name_` plus a 13-character publisher ID) but not registered. These are the main cleanup candidates.
-   - **Other folders:** not named like a package, such as `windows_ie_ac_001`. These are often used by Windows itself and are listed separately for review.
-5. Calculates each folder's size and last-modified date (newest file inside it), and sorts each group largest first.
-6. Prints the results and writes a text report, plus a CSV.
+   - **Windows components (keep):** from the Windows publisher (`_cw5n1h2txyewy`) or `windows_ie_ac_*`. Shown so you can see them. The remover will not delete them.
+   - **Other folders:** not named like a package. Often used by Windows. Listed separately for review.
+6. Calculates each folder's size and last-modified date (newest file inside it), and sorts each group largest first.
+7. Prints the results and writes a text report, plus a CSV and an HTML report if asked.
 
 ## Requirements
 
@@ -58,6 +60,7 @@ When a Microsoft Store (AppX/MSIX) app is removed, its data folder in `AppData\L
 | `Run-Scan.bat` | Double-click to scan. Saves the report and the CSV, then waits for Enter. |
 | `Run-Scan-Unattended.bat` | Scan for Task Scheduler or other scripts. No prompt, returns an exit code. |
 | `Run-Delete.bat` | Double-click to remove the folders marked in the Desktop CSV, or drag a CSV onto it. |
+| `WinPkgScan.exclude.txt` | Your exclude list. One folder name or wildcard pattern per line. |
 
 Keep these files in the same folder. The other files (`tests/`, `build.ps1`, `.github/`) are only for development.
 
@@ -80,6 +83,10 @@ powershell -ExecutionPolicy Bypass -File .\Find-OrphanedAppxFolders.ps1 -Csv
 | `-NoPause` | Skip the "Press Enter to exit" prompt. Use for scheduled or unattended runs. |
 | `-ReportPath <path>` | Save the report to a custom location instead of the Desktop. |
 | `-Csv` | Also save the results as a CSV next to the report. `Run-Scan.bat` always adds this. |
+| `-Html` | Also save a sortable HTML report next to the report. `Run-Scan.bat` always adds this. |
+| `-Open` | Open the HTML report when the scan finishes. `Run-Scan.bat` adds this when double-clicked. |
+| `-Exclude <patterns>` | Leave out folders matching these names or wildcards, e.g. `-Exclude 'Contoso.*','*Teams*'`. |
+| `-ExcludeFile <path>` | Use a different exclude file. Defaults to `WinPkgScan.exclude.txt` next to the script. |
 
 ```powershell
 .\Find-OrphanedAppxFolders.ps1 -NoPause -Csv -ReportPath "C:\Temp\appx-report.txt"
@@ -97,6 +104,7 @@ Run-Scan-Unattended.bat -Csv -ReportPath "C:\Temp\appx-report.txt"
 - **Console:** summary counts and sizes for each group, plus a table per group (name, size, last modified).
 - **Report file:** `Orphaned-Appx-Packages.txt` on your Desktop (OneDrive-redirected Desktops are detected), or the path given in `-ReportPath`.
 - **CSV file:** same name as the report with a `.csv` extension. Columns: `Delete` (empty, for you to fill in), `Category`, `FolderName`, `SizeMB`, `LastModified`, `FullPath`, `Status`.
+- **HTML report:** same name with a `.html` extension. Summary tiles, one table per group, click a column header to sort, and a filter box. Follows your light or dark mode.
 
 Example report entry:
 
@@ -107,6 +115,19 @@ Last Modified : 2024-03-15
 Path          : C:\Users\You\AppData\Local\Packages\Contoso.SampleApp_abc123def4567
 Status        : NOT CURRENTLY REGISTERED
 ```
+
+## Excluding folders
+
+To keep a folder out of the results for good, add its name to `WinPkgScan.exclude.txt` next to the scripts:
+
+```text
+# Lines starting with # are ignored
+Contoso.MyApp_abc123def4567
+Contoso.*
+*Teams*
+```
+
+`*` matches anything and `?` matches one character. Matching ignores upper and lower case. The remover reads the same file, so excluded folders are never deleted, even if marked in the CSV. For a one-off run, use `-Exclude` instead.
 
 ## Removing folders
 
@@ -124,6 +145,8 @@ Every marked folder is checked again just before it is removed. It is **skipped*
 - it is not directly inside `%LOCALAPPDATA%\Packages` of the current user, or its `FolderName` and `FullPath` do not match
 - it no longer exists, it is a link or junction, or it contains one (links are never followed)
 - it is registered to an installed app right now
+- it matches an exclude pattern
+- it is a Windows component, unless you use `-IncludeWindowsComponents` (not recommended)
 - it is not package-named (an "Other folder"), unless you use `-IncludeOtherFolders`
 - anything inside it changed in the last 30 days (change with `-MinAgeDays`)
 
@@ -139,6 +162,9 @@ If the list of installed packages cannot be read, nothing is removed.
 | `-Force` | Do not ask before each folder. Needed for unattended runs. |
 | `-MinAgeDays <n>` | Skip folders with anything changed in the last `n` days. Default `30`. `0` turns this off. |
 | `-IncludeOtherFolders` | Also allow folders that are not package-named. |
+| `-IncludeWindowsComponents` | Also allow Windows component folders. Not recommended. |
+| `-Exclude <patterns>` | Never delete folders matching these names or wildcards. |
+| `-ExcludeFile <path>` | Use a different exclude file. Defaults to `WinPkgScan.exclude.txt` next to the script. |
 | `-LogPath <path>` | Where to save the log. Defaults to `WinPkgScan-DeleteLog-<date-time>.csv` next to the input CSV. |
 | `-NoPause` | Skip the "Press Enter to exit" prompt. |
 
@@ -181,7 +207,7 @@ Run lint and tests:
 ./build.ps1                                # lint + tests
 ./build.ps1 -Task Lint                     # PSScriptAnalyzer only
 ./build.ps1 -Task Test                     # Pester only
-./build.ps1 -Task Package -Tag v1.4.0      # build the release zip into out/
+./build.ps1 -Task Package -Tag v1.5.0      # build the release zip into out/
 ```
 
 - **Unit tests** mock `Get-AppxPackage` and use a fake Packages folder, so they run on any OS. Deletion is tested for real on the fake folders.
@@ -202,7 +228,7 @@ Run lint and tests:
    git push origin vX.Y.Z
    ```
 
-The **Release** workflow (`.github/workflows/release.yml`) then runs the full CI. If CI passes, it builds the zip (both scripts, the three batch files, README and LICENSE) and a SHA256 checksum, and publishes a GitHub Release. The release notes come from the CHANGELOG. The release fails if the tag does not match the script version or the CHANGELOG has no section for it.
+The **Release** workflow (`.github/workflows/release.yml`) then runs the full CI. If CI passes, it builds the zip (both scripts, the three batch files, the exclude file, README and LICENSE) and a SHA256 checksum, and publishes a GitHub Release. The release notes come from the CHANGELOG. The release fails if the tag does not match the script version or the CHANGELOG has no section for it.
 
 ## License
 

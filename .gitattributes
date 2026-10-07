@@ -10,3 +10,6 @@
 
 # Docs
 *.md   text eol=lf
+
+# Exclude list: keep CRLF so Notepad on any Windows version shows it correctly
+WinPkgScan.exclude.txt text eol=crlf

@@ -43,6 +43,7 @@ $ReleaseFiles = @(
     'Run-Scan.bat'
     'Run-Scan-Unattended.bat'
     'Run-Delete.bat'
+    'WinPkgScan.exclude.txt'
     'README.md'
     'LICENSE'
 )

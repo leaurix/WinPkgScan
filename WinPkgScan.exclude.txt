@@ -1,0 +1,12 @@
+# WinPkgScan exclude list
+#
+# Folders matching a pattern here are left out of the scan results and
+# are never deleted by Remove-OrphanedAppxFolders.ps1.
+#
+# One pattern per line. Lines starting with # are ignored.
+# Wildcards: * matches anything, ? matches one character.
+#
+# Examples (remove the # to use them):
+# Contoso.MyApp_abc123def4567
+# Contoso.*
+# *Teams*
