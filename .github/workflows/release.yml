@@ -7,6 +7,12 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # Re-run for an existing tag from the Actions tab.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release, e.g. v1.5.0'
+        required: true
 
 permissions:
   contents: read
@@ -24,21 +30,29 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Build release zip
         shell: pwsh
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: ./build.ps1 -Task Package -Tag $env:TAG
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          gh release create "$TAG" \
-            "out/WinPkgScan-$TAG.zip" \
-            "out/WinPkgScan-$TAG.zip.sha256" \
-            --title "WinPkgScan $TAG" \
-            --notes-file out/release-notes.md \
-            --verify-tag
+          files=("out/WinPkgScan-$TAG.zip" "out/WinPkgScan-$TAG.zip.sha256")
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # A release was already made for this tag (e.g. by hand on GitHub):
+            # attach the files and replace its title and notes.
+            gh release upload "$TAG" "${files[@]}" --clobber
+            gh release edit "$TAG" --title "WinPkgScan $TAG" --notes-file out/release-notes.md --latest
+          else
+            gh release create "$TAG" "${files[@]}" \
+              --title "WinPkgScan $TAG" \
+              --notes-file out/release-notes.md \
+              --verify-tag --latest
+          fi
