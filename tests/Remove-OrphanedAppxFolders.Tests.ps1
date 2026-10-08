@@ -27,9 +27,18 @@ BeforeAll {
     # command that exists, so add a stub where it is missing.
     $script:CreatedStub = $false
     if (-not (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue)) {
-        function global:Get-AppxPackage { [CmdletBinding()] param() }
+        function global:Get-AppxPackage { [CmdletBinding()] param([switch]$AllUsers, [string]$PackageTypeFilter) }
         $script:CreatedStub = $true
     }
+    if (-not (Get-Command Get-AppxProvisionedPackage -ErrorAction SilentlyContinue)) {
+        function global:Get-AppxProvisionedPackage { [CmdletBinding()] param([switch]$Online) }
+    }
+    $realSid = $null
+    try { $realSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $realSid = $null }
+    if (-not $realSid) {
+        $env:WINPKGSCAN_TEST_SID = 'S-1-5-21-1000-2000-3000-1001'
+    }
+    $script:RestorePath = Join-Path $RepoRoot 'Restore-OrphanedAppxFolders.ps1'
 
     $script:OrphanA   = 'Contoso.Old_abc123def4567'
     $script:OrphanB   = 'Fabrikam.Gone_8wekyb3d8bbwe'
@@ -93,6 +102,7 @@ BeforeAll {
         param([hashtable]$Params = @{})
         $Params['NoPause'] = $true
         if (-not $Params.ContainsKey('ExcludeFile')) { $Params['ExcludeFile'] = $script:EmptyExclude }
+        if (-not $Params.ContainsKey('AdminChecks')) { $Params['AdminChecks'] = 'Off' }
         if (-not $Params.ContainsKey('CsvPath')) { $Params['CsvPath'] = $script:CsvPath }
         if (-not $Params.ContainsKey('LogPath')) { $Params['LogPath'] = $script:LogPath }
         if (-not ($Params.ContainsKey('WhatIf') -or $Params.ContainsKey('Confirm') -or $Params.ContainsKey('Force'))) {
@@ -132,14 +142,18 @@ Describe 'Remove script file' {
         $cmd.Parameters.Keys | Should -Contain 'Confirm'
     }
 
-    It 'has the same version as the scanner' {
+    It 'has the same version as the scanner (<File>)' -TestCases @(
+        @{ File = 'Remove-OrphanedAppxFolders.ps1' }, @{ File = 'Restore-OrphanedAppxFolders.ps1' }
+    ) {
+        param($File)
         $pattern = '\$ScriptVersion\s*=\s*"(\d+\.\d+\.\d+)"'
-        $removeVer = [regex]::Match((Get-Content -LiteralPath $RemovePath -Raw), $pattern).Groups[1].Value
-        $scanVer   = [regex]::Match((Get-Content -LiteralPath $ScanPath -Raw), $pattern).Groups[1].Value
-        $helpVer   = [regex]::Match((Get-Content -LiteralPath $RemovePath -Raw), 'Version:\s*(\d+\.\d+\.\d+)').Groups[1].Value
-        $removeVer | Should -Not -BeNullOrEmpty
-        $removeVer | Should -Be $scanVer
-        $helpVer   | Should -Be $scanVer
+        $text    = Get-Content -LiteralPath (Join-Path $RepoRoot $File) -Raw
+        $ver     = [regex]::Match($text, $pattern).Groups[1].Value
+        $scanVer = [regex]::Match((Get-Content -LiteralPath $ScanPath -Raw), $pattern).Groups[1].Value
+        $helpVer = [regex]::Match($text, 'Version:\s*(\d+\.\d+\.\d+)').Groups[1].Value
+        $ver     | Should -Not -BeNullOrEmpty
+        $ver     | Should -Be $scanVer
+        $helpVer | Should -Be $scanVer
     }
 }
 
@@ -398,6 +412,99 @@ Describe 'Removing (mocked AppX packages)' {
             $keep | Should -Exist
             $DirA | Should -Exist
             (Get-LogRow $r $OrphanA).Reason | Should -Match 'Contains links or junctions'
+        }
+    }
+
+    Context 'finding the CSV' {
+
+        BeforeEach {
+            $script:Desk = Join-Path $WorkDir 'Desktop'
+            $script:Down = Join-Path $WorkDir 'Downloads'
+            New-Item -ItemType Directory -Path $Desk, $Down -Force | Out-Null
+        }
+
+        It 'uses the newest marked file from the HTML report' {
+            $script:CsvPath = Join-Path $Desk 'Orphaned-Appx-Packages.csv'
+            New-TestCsv -Marked $OrphanB
+            (Get-Item -LiteralPath $CsvPath).LastWriteTime = (Get-Date).AddHours(-1)
+            $script:CsvPath = Join-Path $Down 'WinPkgScan-marked (1).csv'
+            New-TestCsv -Marked $OrphanA
+
+            $r = Invoke-Remove @{ Permanent = $true; CsvPath = ''; SearchFolder = @($Desk, $Down) }
+            $r.ExitCode | Should -Be 0
+            $DirA | Should -Not -Exist
+            $DirB | Should -Exist
+        }
+
+        It 'uses the Desktop CSV when it is newer' {
+            $script:CsvPath = Join-Path $Down 'WinPkgScan-marked.csv'
+            New-TestCsv -Marked $OrphanA
+            (Get-Item -LiteralPath $CsvPath).LastWriteTime = (Get-Date).AddHours(-1)
+            $script:CsvPath = Join-Path $Desk 'Orphaned-Appx-Packages.csv'
+            New-TestCsv -Marked $OrphanB
+
+            Invoke-Remove @{ Permanent = $true; CsvPath = ''; SearchFolder = @($Desk, $Down) } | Out-Null
+            $DirA | Should -Exist
+            $DirB | Should -Not -Exist
+        }
+
+        It 'exits 1 when no CSV is found' {
+            (Invoke-Remove @{ Permanent = $true; CsvPath = ''; SearchFolder = @($Desk, $Down) }).ExitCode | Should -Be 1
+            $DirA | Should -Exist
+        }
+    }
+
+    Context 'reading CSV files saved by other programs' {
+
+        BeforeEach {
+            # A folder name with a non-ASCII letter, as in a user name like Pena with a tilde.
+            $script:Tilde = 'Pe' + [char]0x00F1 + 'a.App_abc123def4567'
+            $script:DirTilde = New-PackageFolder -Name $Tilde
+        }
+
+        It 'reads <Kind>' -TestCases @(
+            @{ Kind = 'UTF-8 with BOM (browser, PowerShell 5.1)'; Enc = 'utf8bom' }
+            @{ Kind = 'UTF-8 without BOM (PowerShell 7)'; Enc = 'utf8' }
+            @{ Kind = 'ANSI code page (Excel "CSV")'; Enc = 'ansi' }
+            @{ Kind = 'UTF-16 (Excel "Unicode Text")'; Enc = 'utf16' }
+        ) {
+            param($Kind, $Enc)
+            $full = Join-Path $PackagesDir $Tilde
+            $text = '"Delete","FolderName","FullPath"' + "`r`n" + '"Yes","' + $Tilde + '","' + $full + '"' + "`r`n"
+            $bytes = switch ($Enc) {
+                'utf8bom' { [byte[]](0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes($text) }
+                'utf8'    { [System.Text.Encoding]::UTF8.GetBytes($text) }
+                'ansi'    { [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage).GetBytes($text) }
+                'utf16'   { [byte[]](0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes($text) }
+            }
+            [System.IO.File]::WriteAllBytes($CsvPath, $bytes)
+            $r = Invoke-Remove @{ Permanent = $true }
+            $r.ExitCode | Should -Be 0
+            $DirTilde | Should -Not -Exist
+        }
+    }
+
+    Context 'administrator checks' {
+
+        It 'skips an app that Windows still knows for you (staged or pending)' {
+            Mock Get-AppxPackage -ParameterFilter { $AllUsers } {
+                $me = $env:WINPKGSCAN_TEST_SID
+                try { $w = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; if ($w) { $me = $w } } catch { $me = $env:WINPKGSCAN_TEST_SID }
+                [pscustomobject]@{ PackageFamilyName = 'Contoso.Old_abc123def4567'
+                    PackageUserInformation = @("$me [me]: Staged") }
+            }
+            New-TestCsv -Marked $OrphanA, $OrphanB
+            $r = Invoke-Remove @{ Permanent = $true; AdminChecks = 'On' }
+            $DirA | Should -Exist
+            $DirB | Should -Not -Exist
+            (Get-LogRow $r $OrphanA).Reason | Should -Match 'staged or pending'
+        }
+
+        It 'still deletes when the admin checks fail' {
+            Mock Get-AppxPackage -ParameterFilter { $AllUsers } { throw 'Access denied (mock)' }
+            New-TestCsv -Marked $OrphanA
+            (Invoke-Remove @{ Permanent = $true; AdminChecks = 'On' }).ExitCode | Should -Be 0
+            $DirA | Should -Not -Exist
         }
     }
 

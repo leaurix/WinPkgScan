@@ -3,6 +3,23 @@
 All notable changes to this project are listed here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-10-08
+
+### Added
+- **Mark folders in the HTML report:** tick orphaned folders and click **Save marked CSV**. No Excel needed. Includes "mark all shown", which respects the filter, and a running count and size.
+- **`WinPkgScan.bat` menu:** scan, scan as administrator, open the report, preview, delete, restore, edit exclusions and help, in one place. Also runs `scan`, `preview`, `delete` and `restore` directly for scripts.
+- **`Restore-OrphanedAppxFolders.ps1`:** puts recycled folders back from the Recycle Bin using the delete log. Supports `-WhatIf` and `-Name`. Skips a folder if something already exists at its path.
+- **Administrator checks** (`-AdminChecks Auto|On|Off`, on both scanner and remover): when elevated, apps still registered to you in an unfinished state (staged or pending) are kept out of the results and never deleted. Folders get notes such as "Provisioned" or "Installed for 2 other users".
+- New `Notes` column in the CSV, text report and HTML report.
+- The remover finds the CSV itself: the newest of `Orphaned-Appx-Packages.csv` and `WinPkgScan-marked*.csv` on the Desktop and in Downloads (`-SearchFolder` to change).
+- Screenshot of the HTML report in the README.
+- Dependabot keeps the GitHub Actions versions up to date.
+
+### Changed
+- Package lookup now includes every package type (optional, resource, bundle), so fewer folders are wrongly flagged. Falls back if the filter is not supported.
+- CSV files are read with their real encoding (UTF-8 with or without BOM, UTF-16, or Excel's ANSI code page), so folder paths with letters like n-tilde work.
+- The release zip includes `WinPkgScan.bat` and `Restore-OrphanedAppxFolders.ps1`.
+
 ## [1.5.0] - 2026-10-07
 
 ### Added

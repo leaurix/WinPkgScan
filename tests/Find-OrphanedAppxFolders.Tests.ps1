@@ -25,8 +25,20 @@ BeforeAll {
     # The stub is removed again before the real Windows run.
     $script:CreatedStub = $false
     if (-not (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue)) {
-        function global:Get-AppxPackage { [CmdletBinding()] param() }
+        function global:Get-AppxPackage { [CmdletBinding()] param([switch]$AllUsers, [string]$PackageTypeFilter) }
         $script:CreatedStub = $true
+    }
+    if (-not (Get-Command Get-AppxProvisionedPackage -ErrorAction SilentlyContinue)) {
+        function global:Get-AppxProvisionedPackage { [CmdletBinding()] param([switch]$Online) }
+    }
+
+    # The current user's SID, as the scripts see it. There is none off Windows,
+    # so the scripts read it from WINPKGSCAN_TEST_SID instead.
+    $script:MySid = $null
+    try { $script:MySid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $script:MySid = $null }
+    if (-not $script:MySid) {
+        $script:MySid = 'S-1-5-21-1000-2000-3000-1001'
+        $env:WINPKGSCAN_TEST_SID = $script:MySid
     }
 
     # An empty exclude file, so the repo's WinPkgScan.exclude.txt never
@@ -39,6 +51,7 @@ BeforeAll {
         param([hashtable]$Params = @{})
         $Params['NoPause'] = $true
         if (-not $Params.ContainsKey('ExcludeFile')) { $Params['ExcludeFile'] = $script:EmptyExclude }
+        if (-not $Params.ContainsKey('AdminChecks')) { $Params['AdminChecks'] = 'Off' }
         & $script:ScriptPath @Params 6>&1 | Out-Null
         return $LASTEXITCODE
     }
@@ -198,6 +211,84 @@ Describe 'Scanning (mocked AppX packages)' {
         $after | Should -Be $before
     }
 
+    Context 'package lookup' {
+
+        It 'asks for every package type' {
+            Invoke-Scan @{ ReportPath = $ReportPath } | Should -Be 0
+            Should -Invoke Get-AppxPackage -ParameterFilter { $PackageTypeFilter -eq 'All' } -Scope It
+        }
+
+        It 'falls back when the package type filter is not supported' {
+            Mock Get-AppxPackage { throw 'unsupported' } -ParameterFilter { $PackageTypeFilter }
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true } | Should -Be 0
+            @(Import-Csv -LiteralPath $CsvPath).FolderName | Should -Not -Contain 'Microsoft.WindowsStore_8wekyb3d8bbwe'
+        }
+
+        It 'adds an empty Notes column when admin checks are off' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true } | Should -Be 0
+            $rows = @(Import-Csv -LiteralPath $CsvPath)
+            $rows[0].PSObject.Properties.Name | Should -Contain 'Notes'
+            @($rows | Where-Object { $_.Notes }).Count | Should -Be 0
+        }
+    }
+
+    Context 'administrator checks' {
+
+        BeforeEach {
+            New-PackageFolder -Name 'Staged.App_abc123def4567'
+            New-PackageFolder -Name 'Prov.App_8wekyb3d8bbwe'
+            Mock Get-AppxPackage -ParameterFilter { $AllUsers } {
+                $me = $env:WINPKGSCAN_TEST_SID
+                try { $w = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; if ($w) { $me = $w } } catch { $me = $env:WINPKGSCAN_TEST_SID }
+                [pscustomobject]@{ PackageFamilyName = 'Staged.App_abc123def4567'
+                    PackageUserInformation = @([pscustomobject]@{
+                        UserSecurityId = [pscustomobject]@{ Sid = $me; UserName = 'me' }; InstallState = 'Staged' }) }
+                [pscustomobject]@{ PackageFamilyName = 'Contoso.Old_abc123def4567'
+                    PackageUserInformation = @(
+                        'S-1-5-21-9-9-9-2001 [bob]: Installed',
+                        'S-1-5-21-9-9-9-2002 [amy]: Installed',
+                        'S-1-5-21-9-9-9-2002 [amy]: Staged',
+                        'S-1-5-18 [S-1-5-18]: Staged') }
+            }
+            Mock Get-AppxProvisionedPackage {
+                [pscustomobject]@{ DisplayName = 'Prov.App'; PublisherId = '8wekyb3d8bbwe' }
+            }
+        }
+
+        It 'keeps out folders of apps registered to you in an unfinished state' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; AdminChecks = 'On' } | Should -Be 0
+            $rows = @(Import-Csv -LiteralPath $CsvPath)
+            $rows.FolderName | Should -Not -Contain 'Staged.App_abc123def4567'
+            (Get-Content -LiteralPath $ReportPath -Raw) | Should -Match 'Kept by admin checks:\s+1'
+        }
+
+        It 'notes how many other real user accounts have the app' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; AdminChecks = 'On' } | Should -Be 0
+            $row = Import-Csv -LiteralPath $CsvPath | Where-Object FolderName -eq 'Contoso.Old_abc123def4567'
+            $row.Notes | Should -Be 'Installed for 2 other users'
+        }
+
+        It 'notes provisioned apps' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; AdminChecks = 'On' } | Should -Be 0
+            $row = Import-Csv -LiteralPath $CsvPath | Where-Object FolderName -eq 'Prov.App_8wekyb3d8bbwe'
+            $row.Category | Should -Be 'Orphaned package'
+            $row.Notes | Should -Match 'Provisioned'
+        }
+
+        It 'does not run them when set to Off' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; AdminChecks = 'Off' } | Should -Be 0
+            Should -Invoke Get-AppxPackage -ParameterFilter { $AllUsers } -Times 0 -Scope It
+            @(Import-Csv -LiteralPath $CsvPath).FolderName | Should -Contain 'Staged.App_abc123def4567'
+        }
+
+        It 'carries on with a warning when they fail' {
+            Mock Get-AppxPackage -ParameterFilter { $AllUsers } { throw 'Access denied (mock)' }
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; AdminChecks = 'On' } | Should -Be 0
+            (Get-Content -LiteralPath $ReportPath -Raw) | Should -Match 'Administrator checks:\s+failed'
+            @(Import-Csv -LiteralPath $CsvPath).FolderName | Should -Contain 'Staged.App_abc123def4567'
+        }
+    }
+
     Context 'exclusions' {
 
         It 'leaves out folders matching -Exclude wildcards' {
@@ -245,6 +336,25 @@ Describe 'Scanning (mocked AppX packages)' {
             $html | Should -Match 'Other folders'
             $html | Should -Match 'Amp&amp;Co_abc123def4567'
             $html | Should -Not -Match 'Amp&Co_'
+        }
+
+        It 'lets you mark only orphaned folders, with the data needed for the CSV' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Html = $true } | Should -Be 0
+            $html = Get-Content -LiteralPath ([System.IO.Path]::ChangeExtension($ReportPath, '.html')) -Raw
+            ([regex]::Matches($html, 'class="mark"')).Count | Should -Be 2
+            $html | Should -Match 'data-name="Contoso\.Old_abc123def4567"'
+            $html | Should -Match 'data-path="[^"]*Contoso\.Old_abc123def4567"'
+            $html | Should -Not -Match 'data-name="windows_ie_ac_001"'
+            $html | Should -Match 'id="save"'
+            $html | Should -Match 'WinPkgScan-marked\.csv'
+        }
+
+        It 'writes balanced HTML' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Html = $true } | Should -Be 0
+            $html = Get-Content -LiteralPath ([System.IO.Path]::ChangeExtension($ReportPath, '.html')) -Raw
+            foreach ($tag in 'div', 'section', 'table', 'tr', 'main') {
+                ([regex]::Matches($html, "<$tag[ >]")).Count | Should -Be ([regex]::Matches($html, "</$tag>")).Count -Because "<$tag> must be closed"
+            }
         }
 
         It 'does not write an HTML report without -Html' {

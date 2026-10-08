@@ -40,6 +40,8 @@ $Failed = $false
 $ReleaseFiles = @(
     'Find-OrphanedAppxFolders.ps1'
     'Remove-OrphanedAppxFolders.ps1'
+    'Restore-OrphanedAppxFolders.ps1'
+    'WinPkgScan.bat'
     'Run-Scan.bat'
     'Run-Scan-Unattended.bat'
     'Run-Delete.bat'
@@ -52,6 +54,8 @@ $ReleaseFiles = @(
 $CrlfFiles = @(
     'Find-OrphanedAppxFolders.ps1'
     'Remove-OrphanedAppxFolders.ps1'
+    'Restore-OrphanedAppxFolders.ps1'
+    'WinPkgScan.bat'
     'Run-Scan.bat'
     'Run-Scan-Unattended.bat'
     'Run-Delete.bat'
@@ -65,6 +69,7 @@ function Invoke-Lint {
     $files = @(
         Join-Path $Root 'Find-OrphanedAppxFolders.ps1'
         Join-Path $Root 'Remove-OrphanedAppxFolders.ps1'
+        Join-Path $Root 'Restore-OrphanedAppxFolders.ps1'
         Join-Path $Root 'build.ps1'
     )
     $settings = Join-Path $Root 'PSScriptAnalyzerSettings.psd1'

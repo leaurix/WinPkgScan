@@ -17,6 +17,11 @@
 
     Folders matching an exclude pattern are left out of the results.
 
+    When run as administrator, it also asks Windows about every user's
+    packages: folders of apps registered to you in an unfinished state
+    (staged or pending) are kept out of the results, and each folder gets
+    notes such as "Provisioned" or "Installed for 1 other user".
+
     SAFETY: read-only. Nothing is deleted, uninstalled or modified.
 
 .PARAMETER NoPause
@@ -45,6 +50,10 @@
     A text file with one exclude pattern per line (# starts a comment).
     Defaults to WinPkgScan.exclude.txt next to this script.
 
+.PARAMETER AdminChecks
+    Auto (default): run the extra checks when running as administrator.
+    On: always try them (a warning is shown if they fail). Off: never.
+
 .EXAMPLE
     .\Find-OrphanedAppxFolders.ps1
 
@@ -55,7 +64,7 @@
     .\Find-OrphanedAppxFolders.ps1 -Csv -Html -Open -Exclude '*Teams*'
 
 .NOTES
-    Version: 1.5.0
+    Version: 1.6.0
 #>
 
 [CmdletBinding()]
@@ -66,10 +75,12 @@ param(
     [switch]$Html,
     [switch]$Open,
     [string[]]$Exclude,
-    [string]$ExcludeFile
+    [string]$ExcludeFile,
+    [ValidateSet('Auto', 'On', 'Off')]
+    [string]$AdminChecks = 'Auto'
 )
 
-$ScriptVersion = "1.5.0"
+$ScriptVersion = "1.6.0"
 $PauseAtEnd    = -not $NoPause.IsPresent
 
 function Exit-Script {
@@ -88,7 +99,8 @@ function Write-ResultTable {
     $Items |
         Format-Table FolderName,
             @{Name = "Size (MB)"; Expression = { $_.SizeMB }},
-            @{Name = "Last Modified"; Expression = { $_.LastModified }} -AutoSize |
+            @{Name = "Last Modified"; Expression = { $_.LastModified }},
+            Notes -AutoSize |
         Out-String -Width 250 |
         Write-Host
 }
@@ -115,6 +127,9 @@ function Add-ReportSection {
         $Report.Add("Last Modified : $($Item.LastModified)")
         $Report.Add("Path          : $($Item.FullPath)")
         $Report.Add("Status        : $($Item.Status)")
+        if ($Item.Notes) {
+            $Report.Add("Notes         : $($Item.Notes)")
+        }
         $Report.Add("")
     }
 }
@@ -176,13 +191,13 @@ function Write-HtmlReport {
 <title>WinPkgScan report</title>
 <style>
 :root { --bg:#f7f7f5; --card:#ffffff; --text:#1d1d1f; --muted:#6b6b70; --line:#e2e2e0;
-        --accent:#2f6fde; --warn:#b26a00; --keep:#2e7d32; --head:#f0f0ee; }
+        --accent:#2f6fde; --warn:#b26a00; --keep:#2e7d32; --head:#f0f0ee; --mark:#eaf1fd; }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#161618; --card:#1f1f22; --text:#ececee; --muted:#9a9aa2; --line:#33333a;
-          --accent:#6ea0ff; --warn:#f0a843; --keep:#7bc47f; --head:#26262a; }
+          --accent:#6ea0ff; --warn:#f0a843; --keep:#7bc47f; --head:#26262a; --mark:#1d2a42; }
 }
 * { box-sizing:border-box; }
-body { margin:0; padding:24px 16px 48px; background:var(--bg); color:var(--text);
+body { margin:0; padding:24px 16px 96px; background:var(--bg); color:var(--text);
        font:14px/1.5 "Segoe UI", system-ui, sans-serif; }
 main { max-width:1100px; margin:0 auto; }
 h1 { font-size:22px; margin:0 0 4px; }
@@ -193,6 +208,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 .tile span { color:var(--muted); font-size:12px; }
 .note { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--warn);
         border-radius:8px; padding:10px 14px; margin-bottom:20px; }
+.note ol { margin:6px 0 0; padding-left:20px; }
 input#filter { width:100%; max-width:360px; padding:8px 10px; border:1px solid var(--line);
                border-radius:8px; background:var(--card); color:var(--text); margin-bottom:16px; }
 section { margin-bottom:28px; }
@@ -203,14 +219,27 @@ section p { color:var(--muted); margin:0 0 8px; }
 table { border-collapse:collapse; width:100%; }
 th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
 th { background:var(--head); cursor:pointer; user-select:none; font-weight:600; }
+th.sel, td.sel { width:36px; padding-right:0; cursor:default; }
 th[data-dir="asc"]::after { content:" \25B2"; font-size:10px; }
 th[data-dir="desc"]::after { content:" \25BC"; font-size:10px; }
 td.num, th.num { text-align:right; }
 td.path { color:var(--muted); font-size:12px; }
+td.notes { color:var(--warn); font-size:12px; }
+tr.marked td { background:var(--mark); }
 tr:last-child td { border-bottom:none; }
+input[type=checkbox] { width:16px; height:16px; cursor:pointer; }
 .empty { padding:12px; color:var(--muted); }
 .k-orphan h2 { color:var(--accent); } .k-windows h2 { color:var(--keep); } .k-other h2 { color:var(--warn); }
+.bar { position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:1px solid var(--line);
+       padding:10px 16px; box-shadow:0 -2px 8px rgba(0,0,0,.08); }
+.bar .in { max-width:1100px; margin:0 auto; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.bar b { white-space:nowrap; }
+.bar span { color:var(--muted); font-size:12px; flex:1 1 260px; }
+button { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--accent);
+         background:var(--accent); color:#fff; cursor:pointer; }
+button:disabled { opacity:.45; cursor:default; }
 footer { color:var(--muted); font-size:12px; margin-top:32px; }
+@media (max-width: 600px) { .bar span { display:none; } .bar .in { justify-content:space-between; } }
 </style>
 </head>
 <body>
@@ -221,20 +250,41 @@ footer { color:var(--muted); font-size:12px; margin-top:32px; }
     foreach ($t in $Tiles) {
         [void]$sb.Append("<div class=`"tile`"><b>$(ConvertTo-HtmlText $t.Value)</b><span>$(ConvertTo-HtmlText $t.Label)</span></div>`n")
     }
-    [void]$sb.Append("</div>`n<div class=`"note`">Read-only report: nothing was deleted or modified. To remove folders, type <b>Yes</b> in the Delete column of the CSV and run <b>Run-Delete.bat</b>.</div>`n")
-    [void]$sb.Append("<input id=`"filter`" type=`"search`" placeholder=`"Filter by name or path`" aria-label=`"Filter`">`n")
+    [void]$sb.Append(@'
+</div>
+<div class="note">Nothing was deleted or modified. To remove folders:
+<ol><li>Tick the orphaned folders to remove, then click <b>Save marked CSV</b>. It goes to your Downloads folder.</li>
+<li>Double-click <b>Run-Delete.bat</b>, or choose <b>Delete</b> in <b>WinPkgScan.bat</b>. It uses the newest marked file, re-checks every folder and moves it to the Recycle Bin.</li></ol></div>
+<input id="filter" type="search" placeholder="Filter by name or path" aria-label="Filter">
+'@)
 
     foreach ($sec in $Sections) {
-        $count = @($sec.Items).Count
+        $count    = @($sec.Items).Count
+        $markable = $sec.Kind -eq 'orphan'
         [void]$sb.Append("<section class=`"k-$($sec.Kind)`">`n<h2>$(ConvertTo-HtmlText $sec.Title) <small>($count, $($sec.TotalMB) MB)</small></h2>`n<p>$(ConvertTo-HtmlText $sec.Note)</p>`n<div class=`"wrap`">`n")
         if ($count -eq 0) {
             [void]$sb.Append("<div class=`"empty`">None found.</div>`n")
         }
         else {
-            [void]$sb.Append("<table class=`"sortable`"><thead><tr><th>Folder</th><th class=`"num`" data-type=`"num`">Size (MB)</th><th>Last modified</th><th>Path</th></tr></thead><tbody>`n")
+            [void]$sb.Append("<table class=`"sortable`"><thead><tr>")
+            if ($markable) {
+                [void]$sb.Append("<th class=`"sel`"><input type=`"checkbox`" class=`"all`" aria-label=`"Mark all shown`"></th>")
+            }
+            [void]$sb.Append("<th>Folder</th><th class=`"num`" data-type=`"num`">Size (MB)</th><th>Last modified</th><th>Notes</th><th>Path</th></tr></thead><tbody>`n")
             foreach ($i in $sec.Items) {
                 $size = ([double]$i.SizeMB).ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture)
-                [void]$sb.Append("<tr><td>$(ConvertTo-HtmlText $i.FolderName)</td><td class=`"num`" data-v=`"$size`">$size</td><td>$(ConvertTo-HtmlText $i.LastModified)</td><td class=`"path`">$(ConvertTo-HtmlText $i.FullPath)</td></tr>`n")
+                $attr = ''
+                if ($markable) {
+                    $attr = " data-cat=`"$(ConvertTo-HtmlText $i.Category)`" data-name=`"$(ConvertTo-HtmlText $i.FolderName)`"" +
+                            " data-size=`"$size`" data-date=`"$(ConvertTo-HtmlText $i.LastModified)`"" +
+                            " data-path=`"$(ConvertTo-HtmlText $i.FullPath)`" data-status=`"$(ConvertTo-HtmlText $i.Status)`"" +
+                            " data-notes=`"$(ConvertTo-HtmlText $i.Notes)`""
+                }
+                [void]$sb.Append("<tr$attr>")
+                if ($markable) {
+                    [void]$sb.Append("<td class=`"sel`"><input type=`"checkbox`" class=`"mark`" aria-label=`"Mark $(ConvertTo-HtmlText $i.FolderName)`"></td>")
+                }
+                [void]$sb.Append("<td>$(ConvertTo-HtmlText $i.FolderName)</td><td class=`"num`" data-v=`"$size`">$size</td><td>$(ConvertTo-HtmlText $i.LastModified)</td><td class=`"notes`">$(ConvertTo-HtmlText $i.Notes)</td><td class=`"path`">$(ConvertTo-HtmlText $i.FullPath)</td></tr>`n")
             }
             [void]$sb.Append("</tbody></table>`n")
         }
@@ -243,33 +293,171 @@ footer { color:var(--muted); font-size:12px; margin-top:32px; }
 
     [void]$sb.Append("<footer>WinPkgScan v$ScriptVersion</footer>`n</main>`n")
     [void]$sb.Append(@'
+<div class="bar"><div class="in">
+<b id="count">0 marked (0.00 MB)</b>
+<span>Marked folders are checked again before anything is removed, and go to the Recycle Bin.</span>
+<button id="save" type="button" disabled>Save marked CSV</button>
+</div></div>
 <script>
-document.querySelectorAll('table.sortable th').forEach(function (th, col) {
-  th.addEventListener('click', function () {
-    var table = th.closest('table'), body = table.tBodies[0];
-    var asc = th.getAttribute('data-dir') !== 'asc';
-    table.querySelectorAll('th').forEach(function (h) { h.removeAttribute('data-dir'); });
-    th.setAttribute('data-dir', asc ? 'asc' : 'desc');
-    var num = th.getAttribute('data-type') === 'num';
-    Array.prototype.slice.call(body.rows).sort(function (a, b) {
-      var x = a.cells[col].getAttribute('data-v') || a.cells[col].textContent;
-      var y = b.cells[col].getAttribute('data-v') || b.cells[col].textContent;
-      var r = num ? parseFloat(x) - parseFloat(y) : x.localeCompare(y);
-      return asc ? r : -r;
-    }).forEach(function (row) { body.appendChild(row); });
+function sortable() {
+  document.querySelectorAll('table.sortable th').forEach(function (th) {
+    if (th.classList.contains('sel')) { return; }
+    th.addEventListener('click', function () {
+      var table = th.closest('table'), body = table.tBodies[0];
+      var col = Array.prototype.indexOf.call(th.parentNode.children, th);
+      var asc = th.getAttribute('data-dir') !== 'asc';
+      table.querySelectorAll('th').forEach(function (h) { h.removeAttribute('data-dir'); });
+      th.setAttribute('data-dir', asc ? 'asc' : 'desc');
+      var num = th.getAttribute('data-type') === 'num';
+      Array.prototype.slice.call(body.rows).sort(function (a, b) {
+        var x = a.cells[col].getAttribute('data-v') || a.cells[col].textContent;
+        var y = b.cells[col].getAttribute('data-v') || b.cells[col].textContent;
+        var r = num ? parseFloat(x) - parseFloat(y) : x.localeCompare(y);
+        return asc ? r : -r;
+      }).forEach(function (row) { body.appendChild(row); });
+    });
+  });
+}
+function markedRows() {
+  return Array.prototype.slice.call(document.querySelectorAll('input.mark:checked')).map(function (c) { return c.closest('tr'); });
+}
+function update() {
+  var rows = markedRows(), mb = 0;
+  rows.forEach(function (r) { mb += parseFloat(r.getAttribute('data-size')) || 0; });
+  document.querySelectorAll('input.mark').forEach(function (c) { c.closest('tr').classList.toggle('marked', c.checked); });
+  document.getElementById('count').textContent = rows.length + ' marked (' + mb.toFixed(2) + ' MB)';
+  document.getElementById('save').disabled = rows.length === 0;
+}
+function csvField(v) { return '"' + String(v === null || v === undefined ? '' : v).replace(/"/g, '""') + '"'; }
+function saveCsv() {
+  var head = ['Delete', 'Category', 'FolderName', 'SizeMB', 'LastModified', 'FullPath', 'Status', 'Notes'];
+  var lines = [head.map(csvField).join(',')];
+  markedRows().forEach(function (r) {
+    lines.push(['Yes', r.getAttribute('data-cat'), r.getAttribute('data-name'), r.getAttribute('data-size'),
+      r.getAttribute('data-date'), r.getAttribute('data-path'), r.getAttribute('data-status'),
+      r.getAttribute('data-notes')].map(csvField).join(','));
+  });
+  var blob = new Blob(['\ufeff' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'WinPkgScan-marked.csv';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+sortable();
+document.querySelectorAll('input.mark').forEach(function (c) { c.addEventListener('change', update); });
+document.querySelectorAll('input.all').forEach(function (all) {
+  all.addEventListener('change', function () {
+    all.closest('table').querySelectorAll('tbody tr').forEach(function (r) {
+      if (!r.hidden) { r.querySelector('input.mark').checked = all.checked; }
+    });
+    update();
   });
 });
+document.getElementById('save').addEventListener('click', saveCsv);
 document.getElementById('filter').addEventListener('input', function (e) {
   var q = e.target.value.toLowerCase();
   document.querySelectorAll('tbody tr').forEach(function (row) {
     row.hidden = q !== '' && row.textContent.toLowerCase().indexOf(q) === -1;
   });
 });
+update();
 </script>
 </body>
 </html>
 '@)
     [System.IO.File]::WriteAllText($Path, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Test-IsAdministrator {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        return ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-CurrentUserSid {
+    $sid = $null
+    try { $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $sid = $null }
+    # Only used by the test suite on non-Windows systems, where there is no SID.
+    if (-not $sid) { $sid = $env:WINPKGSCAN_TEST_SID }
+    return $sid
+}
+
+function Get-RegisteredPackage {
+    # All package types (main, framework, optional, resource, bundle), so no
+    # registered package family is missed. Falls back if the filter is unsupported.
+    try {
+        return @(Get-AppxPackage -PackageTypeFilter All -ErrorAction Stop)
+    }
+    catch {
+        return @(Get-AppxPackage -ErrorAction Stop)
+    }
+}
+
+function Get-AdminPackageInfo {
+    # Needs administrator rights. Returns:
+    #   ForMe:       families Windows knows for this user in any state
+    #                (installed, staged, pending), even if not listed above
+    #   OtherUsers:  family -> number of other user accounts that have it
+    #   Provisioned: families provisioned for new users
+    param([string]$Sid)
+
+    $forMe = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $other = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([StringComparer]::OrdinalIgnoreCase)
+    $prov  = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    try {
+        $all = @(Get-AppxPackage -AllUsers -PackageTypeFilter All -ErrorAction Stop)
+    }
+    catch {
+        $all = @(Get-AppxPackage -AllUsers -ErrorAction Stop)
+    }
+
+    foreach ($p in $all) {
+        $family = "$($p.PackageFamilyName)"
+        if (-not $family) { continue }
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($u in @($p.PackageUserInformation)) {
+            if ($null -eq $u) { continue }
+            # Works with live objects and with text from PowerShell 7's
+            # Windows PowerShell compatibility layer.
+            $text = if ($u.UserSecurityId) {
+                if ($u.UserSecurityId.Sid) { "$($u.UserSecurityId.Sid)" } else { "$($u.UserSecurityId)" }
+            }
+            else { "$u" }
+            $m = [regex]::Match($text, 'S-1-[0-9-]+')
+            if (-not $m.Success) { continue }
+            $userSid = $m.Value
+            if ($Sid -and $userSid -eq $Sid) {
+                [void]$forMe.Add($family)
+            }
+            elseif ($userSid.StartsWith('S-1-5-21-') -and $seen.Add($userSid)) {
+                if ($other.ContainsKey($family)) { $other[$family]++ } else { $other[$family] = 1 }
+            }
+        }
+    }
+
+    try {
+        foreach ($p in @(Get-AppxProvisionedPackage -Online -ErrorAction Stop)) {
+            if ($p.DisplayName -and $p.PublisherId) {
+                [void]$prov.Add("$($p.DisplayName)_$($p.PublisherId)")
+            }
+        }
+    }
+    catch {
+        Write-Verbose "Could not read provisioned packages: $($_.Exception.Message)"
+    }
+
+    [PSCustomObject]@{
+        ForMe       = $forMe
+        OtherUsers  = $other
+        Provisioned = $prov
+    }
 }
 
 $PackagesPath = Join-Path $env:LOCALAPPDATA "Packages"
@@ -329,7 +517,7 @@ try {
     if ($PSVersionTable.PSVersion.Major -ge 7) {
         Import-Module Appx -UseWindowsPowerShell -ErrorAction Stop -WarningAction SilentlyContinue
     }
-    $InstalledPackages = @(Get-AppxPackage -ErrorAction Stop)
+    $InstalledPackages = Get-RegisteredPackage
 }
 catch {
     Write-Host "ERROR: Could not read installed AppX packages." -ForegroundColor Red
@@ -355,6 +543,24 @@ if ($InstalledFamilyNames.Count -eq 0) {
 }
 
 Write-Host "Registered packages found: $($InstalledFamilyNames.Count)"
+
+# Extra checks that need administrator rights.
+$AdminInfo   = $null
+$AdminStatus = "off (run as administrator for extra checks)"
+$UseAdmin    = ($AdminChecks -eq 'On') -or ($AdminChecks -eq 'Auto' -and (Test-IsAdministrator))
+if ($AdminChecks -eq 'Off') { $AdminStatus = "off" }
+if ($UseAdmin) {
+    Write-Host "Running administrator checks..." -ForegroundColor Yellow
+    try {
+        $AdminInfo   = Get-AdminPackageInfo -Sid (Get-CurrentUserSid)
+        $AdminStatus = "on"
+    }
+    catch {
+        $AdminStatus = "failed: $($_.Exception.Message)"
+        Write-Host "WARNING: Administrator checks failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+Write-Host "Administrator checks:     $AdminStatus"
 Write-Host ""
 
 # ------------------------------------------------------------
@@ -370,10 +576,17 @@ $Folders = @(
 
 $Results  = New-Object System.Collections.Generic.List[object]
 $Excluded = New-Object System.Collections.Generic.List[string]
+$KeptByAdminCheck = 0
 
 foreach ($Folder in $Folders) {
 
     if ($InstalledFamilyNames.Contains($Folder.Name)) {
+        continue
+    }
+
+    # Registered to this user in an unfinished state (staged, pending).
+    if ($AdminInfo -and $AdminInfo.ForMe.Contains($Folder.Name)) {
+        $KeptByAdminCheck++
         continue
     }
 
@@ -409,6 +622,17 @@ foreach ($Folder in $Folders) {
         $Category = "Other folder";      $Status = "NOT A PACKAGE-NAMED FOLDER"
     }
 
+    $NoteParts = @()
+    if ($AdminInfo) {
+        if ($AdminInfo.Provisioned.Contains($Folder.Name)) {
+            $NoteParts += "Provisioned (Windows may reinstall it)"
+        }
+        if ($AdminInfo.OtherUsers.ContainsKey($Folder.Name)) {
+            $n = $AdminInfo.OtherUsers[$Folder.Name]
+            $NoteParts += "Installed for $n other user$(if ($n -ne 1) { 's' })"
+        }
+    }
+
     $Results.Add(
         [PSCustomObject]@{
             Category     = $Category
@@ -417,6 +641,7 @@ foreach ($Folder in $Folders) {
             LastModified = $Newest.ToString("yyyy-MM-dd")
             FullPath     = $Folder.FullName
             Status       = $Status
+            Notes        = ($NoteParts -join '; ')
         }
     )
 }
@@ -448,6 +673,9 @@ Write-Host "Orphaned package folders: $($Orphans.Count) ($OrphanMB MB)"
 Write-Host "Windows components:       $($WinParts.Count) ($WinMB MB)"
 Write-Host "Other folders:            $($Others.Count) ($OtherMB MB)"
 Write-Host "Excluded:                 $($Excluded.Count)"
+if ($AdminInfo) {
+    Write-Host "Kept by admin checks:     $KeptByAdminCheck"
+}
 Write-Host ""
 
 if ($Orphans.Count -eq 0) {
@@ -492,6 +720,10 @@ $Report.Add("Orphaned package folders: $($Orphans.Count) ($OrphanMB MB)")
 $Report.Add("Windows components:       $($WinParts.Count) ($WinMB MB)")
 $Report.Add("Other folders:            $($Others.Count) ($OtherMB MB)")
 $Report.Add("Excluded:                 $($Excluded.Count)")
+$Report.Add("Administrator checks:     $AdminStatus")
+if ($AdminInfo) {
+    $Report.Add("Kept by admin checks:     $KeptByAdminCheck")
+}
 if ($ExcludePatterns.Count -gt 0) {
     $Report.Add("Exclude patterns:         $($ExcludePatterns -join ', ')")
 }
@@ -531,7 +763,7 @@ try {
 
     if ($Csv) {
         @($Orphans) + @($WinParts) + @($Others) |
-            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status |
+            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status, Notes |
             Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8 -Force -ErrorAction Stop
         Write-Host "CSV created:" -ForegroundColor Green
         Write-Host $CsvPath -ForegroundColor White
