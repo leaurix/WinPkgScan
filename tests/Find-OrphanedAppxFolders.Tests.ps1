@@ -364,6 +364,16 @@ Describe 'Scanning (mocked AppX packages)' {
         }
     }
 
+    It 'writes a CSV with just the header row when nothing is found' {
+        Get-ChildItem -LiteralPath $PackagesDir -Directory |
+            Where-Object Name -ne 'Microsoft.WindowsStore_8wekyb3d8bbwe' |
+            Remove-Item -Recurse -Force
+        Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true } | Should -Be 0
+        $lines = @(Get-Content -LiteralPath $CsvPath | Where-Object { $_.Trim() })
+        $lines.Count | Should -Be 1
+        $lines[0] | Should -Match '"Delete","Category","FolderName"'
+    }
+
     It 'does not write a CSV without -Csv' {
         Invoke-Scan @{ ReportPath = $ReportPath } | Should -Be 0
         $ReportPath | Should -Exist

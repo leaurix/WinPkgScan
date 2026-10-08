@@ -413,7 +413,13 @@ catch {
     Exit-Script 1
 }
 
-$Columns = if ($Rows.Count -gt 0) { @($Rows[0].PSObject.Properties.Name) } else { @() }
+# A scan that found nothing gives a CSV with no rows (or an empty file).
+if ($Rows.Count -eq 0) {
+    Write-Host "The CSV has no folders in it. Nothing to do." -ForegroundColor Green
+    Exit-Script 0
+}
+
+$Columns = @($Rows[0].PSObject.Properties.Name)
 foreach ($required in 'FolderName', 'FullPath', 'Delete') {
     if ($Columns -notcontains $required) {
         Write-Host "ERROR: The CSV has no '$required' column." -ForegroundColor Red

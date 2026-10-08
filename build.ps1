@@ -105,6 +105,19 @@ function Invoke-Test {
     $config.TestResult.OutputPath   = Join-Path $OutDir 'testResults.xml'
 
     $result = Invoke-Pester -Configuration $config
+
+    # On GitHub Actions, show each failure with its message as an annotation,
+    # so it is visible on the pull request without opening the log.
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        foreach ($test in @($result.Failed)) {
+            $message = ($test.ErrorRecord | ForEach-Object { $_.Exception.Message }) -join ' | '
+            if ($message.Length -gt 900) { $message = $message.Substring(0, 900) + '...' }
+            $title   = ($test.ExpandedPath -replace '[:,]', ' ')
+            $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=$title::$message"
+        }
+    }
+
     if ($result.FailedCount -gt 0 -or $result.Result -ne 'Passed') {
         Write-Host "Tests failed." -ForegroundColor Red
         return $false

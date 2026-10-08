@@ -50,7 +50,9 @@ BeforeAll {
     function Invoke-Restore {
         param([hashtable]$Params = @{})
         $Params['NoPause'] = $true
-        $out  = & $script:RestorePath @Params 6>&1 | Out-String
+        # Join the lines ourselves: Out-String in Windows PowerShell 5.1 wraps
+        # long lines at the console width, which would split long paths.
+        $out  = (& $script:RestorePath @Params 6>&1 | ForEach-Object { "$_" }) -join "`n"
         return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $out }
     }
 }

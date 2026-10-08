@@ -236,6 +236,17 @@ Describe 'Removing (mocked AppX packages)' {
             $DirA | Should -Not -Exist
         }
 
+        It 'exits 0 with nothing to do when the CSV has <Kind>' -TestCases @(
+            @{ Kind = 'only a header row'; Content = '"Delete","Category","FolderName","SizeMB","LastModified","FullPath","Status","Notes"' }
+            @{ Kind = 'no content at all'; Content = '' }
+        ) {
+            param($Kind, $Content)
+            [System.IO.File]::WriteAllText($CsvPath, $Content)
+            $r = Invoke-Remove @{ Permanent = $true }
+            $r.ExitCode | Should -Be 0
+            $DirA | Should -Exist
+        }
+
         It 'exits 0 with nothing to do when no rows are marked' {
             New-TestCsv
             (Invoke-Remove @{ Permanent = $true }).ExitCode | Should -Be 0

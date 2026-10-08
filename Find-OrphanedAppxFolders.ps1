@@ -762,9 +762,16 @@ try {
     Write-Host $ReportPath -ForegroundColor White
 
     if ($Csv) {
-        @($Orphans) + @($WinParts) + @($Others) |
-            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status, Notes |
-            Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8 -Force -ErrorAction Stop
+        $CsvRows = @(@($Orphans) + @($WinParts) + @($Others) |
+            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status, Notes)
+        if ($CsvRows.Count -gt 0) {
+            $CsvRows | Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8 -Force -ErrorAction Stop
+        }
+        else {
+            # Nothing found: still write the header row, so the file is a valid CSV.
+            '"Delete","Category","FolderName","SizeMB","LastModified","FullPath","Status","Notes"' |
+                Out-File -LiteralPath $CsvPath -Encoding UTF8 -Force -ErrorAction Stop
+        }
         Write-Host "CSV created:" -ForegroundColor Green
         Write-Host $CsvPath -ForegroundColor White
     }
