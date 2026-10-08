@@ -123,6 +123,41 @@ function Read-CsvFile {
     return , $rows
 }
 
+function Get-LongPath {
+    # Expands Windows 8.3 short names (e.g. C:\Users\RUNNER~1) so two
+    # spellings of the same path compare equal. Other systems: unchanged.
+    param([string]$Path)
+    if ([Environment]::OSVersion.Platform -ne 'Win32NT' -or [string]::IsNullOrWhiteSpace($Path)) {
+        return $Path
+    }
+    try {
+        if (-not ('WinPkgScanNative.PathApi' -as [type])) {
+            Add-Type -Namespace WinPkgScanNative -Name PathApi -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+public static extern uint GetLongPathName(string shortPath, System.Text.StringBuilder longPath, uint size);
+'@
+        }
+        $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+        # Expand the deepest part that exists, then add the rest back.
+        $existing = $full
+        $rest = @()
+        while ($existing -and -not (Test-Path -LiteralPath $existing)) {
+            $rest = @([System.IO.Path]::GetFileName($existing)) + $rest
+            $existing = [System.IO.Path]::GetDirectoryName($existing)
+        }
+        if (-not $existing) { return $full }
+        $buffer = New-Object System.Text.StringBuilder 1024
+        $length = [WinPkgScanNative.PathApi]::GetLongPathName($existing, $buffer, [uint32]$buffer.Capacity)
+        $long = if ($length -gt 0 -and $length -lt $buffer.Capacity) { $buffer.ToString() } else { $existing }
+        foreach ($part in $rest) { $long = Join-Path $long $part }
+        return $long.TrimEnd('\', '/')
+    }
+    catch {
+        Write-Verbose "Could not expand $Path : $($_.Exception.Message)"
+        return $Path
+    }
+}
+
 function Get-RecycleBinFolder {
     # Every folder in the Recycle Bin, with where it came from.
     $shell = New-Object -ComObject Shell.Application
@@ -133,7 +168,7 @@ function Get-RecycleBinFolder {
         if (-not $from) { continue }
         $when = $entry.ExtendedProperty('System.Recycle.DateDeleted')
         [PSCustomObject]@{
-            OriginalPath = Join-Path $from $entry.Name
+            OriginalPath = Get-LongPath (Join-Path $from $entry.Name)
             DateDeleted  = if ($when) { [datetime]$when } else { [datetime]::MinValue }
             Entry        = $entry
         }
@@ -141,6 +176,7 @@ function Get-RecycleBinFolder {
 }
 
 $PackagesPath = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "Packages"))
+$PackagesLong = Get-LongPath $PackagesPath
 
 $LogPicked = $false
 if ([string]::IsNullOrWhiteSpace($LogPath)) {
@@ -218,11 +254,11 @@ catch {
 $Results = New-Object System.Collections.Generic.List[object]
 
 foreach ($Row in $Recycled) {
-    $target = [System.IO.Path]::GetFullPath("$($Row.FullPath)").TrimEnd('\', '/')
+    $target = Get-LongPath ([System.IO.Path]::GetFullPath("$($Row.FullPath)").TrimEnd('\', '/'))
     $action = $null
     $reason = ""
 
-    if (-not [string]::Equals([System.IO.Path]::GetDirectoryName($target), $PackagesPath, [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not [string]::Equals([System.IO.Path]::GetDirectoryName($target), $PackagesLong, [StringComparison]::OrdinalIgnoreCase)) {
         $action = "Skipped"; $reason = "Not in your Packages folder"
     }
     elseif (Test-Path -LiteralPath $target) {

@@ -30,9 +30,9 @@ BeforeAll {
         function global:Get-AppxPackage { [CmdletBinding()] param([switch]$AllUsers, [string]$PackageTypeFilter) }
         $script:CreatedStub = $true
     }
-    if (-not (Get-Command Get-AppxProvisionedPackage -ErrorAction SilentlyContinue)) {
-        function global:Get-AppxProvisionedPackage { [CmdletBinding()] param([switch]$Online) }
-    }
+    # Always use a stub for provisioned packages: the real cmdlet is in the
+    # DISM module, which PowerShell 7 may load differently, and is slow.
+    function global:Get-AppxProvisionedPackage { [CmdletBinding()] param([switch]$Online) }
     $realSid = $null
     try { $realSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $realSid = $null }
     if (-not $realSid) {
@@ -122,6 +122,7 @@ BeforeAll {
 
 AfterAll {
     $env:LOCALAPPDATA = $script:SavedLocalAppData
+    Remove-Item -Path Function:\global:Get-AppxProvisionedPackage -ErrorAction SilentlyContinue
 }
 
 Describe 'Remove script file' {

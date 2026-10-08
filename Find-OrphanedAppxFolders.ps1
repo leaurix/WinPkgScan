@@ -437,7 +437,7 @@ function Get-AdminPackageInfo {
                 [void]$forMe.Add($family)
             }
             elseif ($userSid.StartsWith('S-1-5-21-') -and $seen.Add($userSid)) {
-                if ($other.ContainsKey($family)) { $other[$family]++ } else { $other[$family] = 1 }
+                if ($other.ContainsKey($family)) { $other[$family] = $other[$family] + 1 } else { $other[$family] = 1 }
             }
         }
     }
