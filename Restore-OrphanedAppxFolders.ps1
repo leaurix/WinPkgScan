@@ -24,6 +24,11 @@
 .PARAMETER Name
     Only restore folders whose name matches. Wildcards allowed.
 
+.PARAMETER NoHistory
+    Do not record this run in the scan history
+    (%LOCALAPPDATA%\WinPkgScan\history.json), which keeps the total
+    space freed with WinPkgScan (restored folders are subtracted).
+
 .PARAMETER NoPause
     Skip the "Press Enter to exit" prompt.
 
@@ -35,7 +40,7 @@
     .\Restore-OrphanedAppxFolders.ps1 -Name 'Contoso.*'
 
 .NOTES
-    Version: 1.6.0
+    Version: 1.7.0
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
@@ -47,10 +52,12 @@ param(
 
     [string[]]$Name,
 
+    [switch]$NoHistory,
+
     [switch]$NoPause
 )
 
-$ScriptVersion = "1.6.0"
+$ScriptVersion = "1.7.0"
 $PauseAtEnd    = -not $NoPause.IsPresent
 
 function Exit-Script {
@@ -156,6 +163,62 @@ public static extern uint GetLongPathName(string shortPath, System.Text.StringBu
         Write-Verbose "Could not expand $Path : $($_.Exception.Message)"
         return $Path
     }
+}
+
+function Get-HistoryPath {
+    return Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'history.json'
+}
+
+function Read-History {
+    # Scan history: past scans (with folder names), removals and restores.
+    param([string]$Path)
+    $history = [PSCustomObject]@{ Scans = @(); Removals = @(); Restores = @() }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $history }
+    try {
+        $text = [System.IO.File]::ReadAllText($Path)
+        if ($text.Trim()) {
+            $data = $text | ConvertFrom-Json -ErrorAction Stop
+            if ($data.Scans)    { $history.Scans    = @($data.Scans) }
+            if ($data.Removals) { $history.Removals = @($data.Removals) }
+            if ($data.Restores) { $history.Restores = @($data.Restores) }
+        }
+    }
+    catch {
+        Write-Host "WARNING: The scan history could not be read, so it starts again: $($_.Exception.Message)" -ForegroundColor Yellow
+        try {
+            Copy-Item -LiteralPath $Path -Destination "$Path.bad" -Force -ErrorAction Stop -WhatIf:$false -Confirm:$false
+        }
+        catch {
+            Write-Verbose "Could not keep a copy of the unreadable history: $($_.Exception.Message)"
+        }
+    }
+    return $history
+}
+
+function Save-History {
+    param($History, [string]$Path)
+    $dir = Split-Path -Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false -Confirm:$false | Out-Null
+    }
+    $data = [ordered]@{
+        Version  = 1
+        Scans    = @(@($History.Scans)    | Select-Object -Last 50)
+        Removals = @(@($History.Removals) | Select-Object -Last 1000)
+        Restores = @(@($History.Restores) | Select-Object -Last 1000)
+    }
+    $json = ConvertTo-Json -InputObject $data -Depth 6
+    [System.IO.File]::WriteAllText($Path, $json, (New-Object System.Text.UTF8Encoding($true)))
+}
+
+function Get-FreedMB {
+    # Space freed with WinPkgScan: removals minus restores.
+    param($History)
+    $freed = 0.0
+    foreach ($r in @($History.Removals)) { if ($r) { $freed += [double]$r.FreedMB } }
+    foreach ($r in @($History.Restores)) { if ($r) { $freed -= [double]$r.SizeMB } }
+    if ($freed -lt 0) { $freed = 0 }
+    return [math]::Round($freed, 2)
 }
 
 function Get-RecycleBinFolder {
@@ -304,7 +367,9 @@ foreach ($Row in $Recycled) {
     $line = "{0,-9} {1}" -f $action, $Row.FolderName
     if ($reason) { $line += "  ($reason)" }
     Write-Host $line -ForegroundColor $colour
-    $Results.Add([PSCustomObject]@{ Action = $action; FolderName = $Row.FolderName })
+    $sizeValue = 0.0
+    [void][double]::TryParse("$($Row.SizeMB)", [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$sizeValue)
+    $Results.Add([PSCustomObject]@{ Action = $action; FolderName = $Row.FolderName; SizeMB = $sizeValue })
 }
 
 $restored = @($Results | Where-Object Action -eq 'Restored').Count
@@ -313,6 +378,24 @@ $skipped  = @($Results | Where-Object Action -eq 'Skipped').Count
 
 Write-Host ""
 Write-Host "Restored: $restored   Skipped: $skipped   Failed: $failed"
+
+# Restored folders take space again: record that in the scan history.
+if (-not $NoHistory -and $restored -gt 0) {
+    try {
+        $restoredMB = [math]::Round((($Results | Where-Object Action -eq 'Restored' | Measure-Object -Property SizeMB -Sum).Sum), 2)
+        $HistoryPath = Get-HistoryPath
+        $History = Read-History -Path $HistoryPath
+        $History.Restores = @(@($History.Restores) + [PSCustomObject]@{
+            Time    = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+            Folders = $restored
+            SizeMB  = $restoredMB
+        })
+        Save-History -History $History -Path $HistoryPath
+    }
+    catch {
+        Write-Host "WARNING: Could not update the scan history: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
 
 if ($failed -gt 0) { Exit-Script 1 }
 Exit-Script 0

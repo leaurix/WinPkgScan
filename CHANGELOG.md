@@ -3,6 +3,21 @@
 All notable changes to this project are listed here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-10-14
+
+### Added
+- **WinPkgScan app (preview):** `WinPkgScan-App.bat` opens a window to scan (or scan as administrator), see the results with summary cards, tick orphaned folders, preview, move them to the Recycle Bin and restore the last delete. It runs the same scripts, so every safety check still applies, and keeps its own files in `%LOCALAPPDATA%\WinPkgScan\app`. Double-click a row to open its folder.
+- **Scan history** in `%LOCALAPPDATA%\WinPkgScan\history.json`:
+  - Folders that are **new since the last scan** are flagged: a `New` column in the CSV, a badge in the HTML report, a line in the text report, and a view in the app.
+  - **Space freed with WinPkgScan** is totalled from every removal, minus restores, and shown in the scanner summary, the HTML report and the app.
+  - Keeps the last 50 scans. An unreadable history file is kept as `history.json.bad` and started again.
+  - `-NoHistory` on the scanner, remover and restore to leave it untouched.
+- Menu option 9 in `WinPkgScan.bat` opens the app.
+- Tests for the app's logic (on any system), a Windows self-test that builds the real window, and tests for the history.
+
+### Changed
+- The release zip includes `WinPkgScan-App.ps1` and `WinPkgScan-App.bat`.
+
 ## [1.6.0] - 2026-10-08
 
 ### Added
