@@ -9,6 +9,7 @@ Finds leftover app folders in `%LOCALAPPDATA%\Packages` whose app is no longer i
 - **You choose what goes.** Tick folders in the HTML report, or mark them in the CSV.
 - **The remover re-checks every folder,** moves it to the Recycle Bin, and logs what it did.
 - **Restore puts them back** from the Recycle Bin, using that log.
+- **New: the WinPkgScan app (preview)** does all of this in one window.
 
 ![HTML report](docs/report.png)
 
@@ -16,19 +17,35 @@ Finds leftover app folders in `%LOCALAPPDATA%\Packages` whose app is no longer i
 
 1. Download `WinPkgScan-vX.Y.Z.zip` from the [latest release](https://github.com/leaurix/WinPkgScan/releases/latest).
 2. Right-click the zip > **Properties** > tick **Unblock** > **OK**. This stops Windows from warning about files downloaded from the internet.
-3. Extract it and double-click `WinPkgScan.bat`.
+3. Extract it and double-click `WinPkgScan-App.bat` for the app, or `WinPkgScan.bat` for the menu.
 
 Optional: check the download is intact. The hash must match the `.sha256` file on the release page.
 
 ```powershell
-Get-FileHash .\WinPkgScan-v1.6.0.zip -Algorithm SHA256
+Get-FileHash .\WinPkgScan-v1.7.0.zip -Algorithm SHA256
 ```
 
 ## Why
 
 When a Microsoft Store (AppX/MSIX) app is removed, its data folder in `AppData\Local\Packages` is sometimes left behind. Over time these folders can take up significant disk space. WinPkgScan finds them and lets you clean them up safely.
 
-## Quick start
+## The app (preview)
+
+Double-click `WinPkgScan-App.bat`.
+
+1. **Scan**, or **Scan as administrator** for the extra checks.
+2. The cards show orphaned folders, folders **new since the last scan**, Windows components, other folders, and the space freed with WinPkgScan so far.
+3. **Show** switches between orphaned folders, new folders and all folders. **Filter** finds a name or note. Double-click a row to open its folder.
+4. Tick the orphaned folders to remove, or **Mark all shown**. Windows components and other folders cannot be ticked.
+5. **Preview** shows what would happen. Nothing is changed.
+6. **Move to Recycle Bin** asks first, then removes the marked folders with every safety check, shows what was done and skipped, and scans again.
+7. **Restore last delete** puts the folders from the app's last delete back.
+
+The app runs the same scripts as the menu, so the results and the safety checks are the same. It keeps its own scan, logs and report in `%LOCALAPPDATA%\WinPkgScan\app` and does not touch the files on your Desktop. **Open HTML report** opens the app's report.
+
+This is a preview: it works, but its look and features may change. Tell us what you would like it to do.
+
+## Quick start (menu)
 
 Double-click `WinPkgScan.bat` and use the menu:
 
@@ -41,6 +58,7 @@ Double-click `WinPkgScan.bat` and use the menu:
   6  Restore folders from the last delete
   7  Edit exclusions
   8  Help - README
+  9  Open the WinPkgScan app - preview
   0  Exit
 ```
 
@@ -65,6 +83,15 @@ Prefer Excel? Open `Orphaned-Appx-Packages.csv` from the Desktop, type `Yes` in 
 6. Calculates each folder's size and last-modified date (newest file inside it), and sorts each group largest first.
 7. Prints the results and writes a text report, plus a CSV and an HTML report if asked.
 
+### Scan history
+
+Each scan is remembered in `%LOCALAPPDATA%\WinPkgScan\history.json` (the last 50 scans):
+
+- Folders found now that were not there last time are **new**: `New` is `Yes` in the CSV, they get a **New** badge in the HTML report, and the summary says how many.
+- Every removal adds to **Freed with WinPkgScan**, and every restore takes away from it.
+
+Use `-NoHistory` on any script to leave the history untouched. Delete the file to start again.
+
 ### Administrator checks
 
 Run the scan as administrator (menu option 2) for two extra checks:
@@ -84,7 +111,9 @@ They run automatically when the scan runs as administrator. Use `-AdminChecks Of
 
 | File | Purpose |
 |---|---|
-| `WinPkgScan.bat` | **Start here.** Menu for scan, report, preview, delete, restore and exclusions. |
+| `WinPkgScan-App.bat` | **Start here.** Opens the WinPkgScan app (preview). |
+| `WinPkgScan.bat` | Menu for scan, report, preview, delete, restore and exclusions. |
+| `WinPkgScan-App.ps1` | The app (Windows window on top of the scripts) |
 | `Find-OrphanedAppxFolders.ps1` | The scanner (read-only) |
 | `Remove-OrphanedAppxFolders.ps1` | The remover |
 | `Restore-OrphanedAppxFolders.ps1` | Puts removed folders back from the Recycle Bin |
@@ -130,6 +159,7 @@ powershell -ExecutionPolicy Bypass -File .\Find-OrphanedAppxFolders.ps1 -Csv -Ht
 | `-Exclude <patterns>` | Leave out folders matching these names or wildcards, e.g. `-Exclude 'Contoso.*','*Teams*'`. |
 | `-ExcludeFile <path>` | Use a different exclude file. Defaults to `WinPkgScan.exclude.txt` next to the script. |
 | `-AdminChecks <Auto\|On\|Off>` | Administrator checks. `Auto` (default) runs them when elevated. |
+| `-NoHistory` | Do not read or update the scan history. |
 
 `Run-Scan.bat` adds `-Csv` and `-Html` itself, and `-Open` when double-clicked.
 
@@ -137,7 +167,7 @@ powershell -ExecutionPolicy Bypass -File .\Find-OrphanedAppxFolders.ps1 -Csv -Ht
 
 - **Console:** summary counts and sizes for each group, plus a table per group (name, size, last modified, notes).
 - **Report file:** `Orphaned-Appx-Packages.txt` on your Desktop (OneDrive-redirected Desktops are detected), or the path given in `-ReportPath`.
-- **CSV file:** same name with a `.csv` extension. Columns: `Delete` (empty, for you to fill in), `Category`, `FolderName`, `SizeMB`, `LastModified`, `FullPath`, `Status`, `Notes`.
+- **CSV file:** same name with a `.csv` extension. Columns: `Delete` (empty, for you to fill in), `Category`, `FolderName`, `SizeMB`, `LastModified`, `FullPath`, `Status`, `Notes`, `New`.
 - **HTML report:** same name with a `.html` extension. Summary tiles, one table per group, click a column header to sort, a filter box, and tick boxes with **Save marked CSV** for orphaned folders. Follows your light or dark mode.
 
 Example report entry:
@@ -205,6 +235,7 @@ If the list of installed packages cannot be read, nothing is removed.
 | `-ExcludeFile <path>` | Use a different exclude file. Defaults to `WinPkgScan.exclude.txt` next to the script. |
 | `-AdminChecks <Auto\|On\|Off>` | Administrator checks. `Auto` (default) runs them when elevated. |
 | `-LogPath <path>` | Where to save the log. Defaults to `WinPkgScan-DeleteLog-<date-time>.csv` next to the input CSV. |
+| `-NoHistory` | Do not add this run to the scan history. |
 | `-NoPause` | Skip the "Press Enter to exit" prompt. |
 
 ### Remover output
@@ -252,17 +283,18 @@ Run lint and tests:
 ./build.ps1                                # lint + tests
 ./build.ps1 -Task Lint                     # PSScriptAnalyzer only
 ./build.ps1 -Task Test                     # Pester only
-./build.ps1 -Task Package -Tag v1.6.0      # build the release zip into out/
+./build.ps1 -Task Package -Tag v1.7.0      # build the release zip into out/
 ```
 
 - **Unit tests** mock `Get-AppxPackage` and use a fake Packages folder, so they run on any OS. Deletion is tested for real on the fake folders.
-- **Integration tests** (tag `Integration`) run only on Windows. They scan the real user packages, recycle and restore a folder through the real Recycle Bin, and run the batch files.
+- **Integration tests** (tag `Integration`) run only on Windows. They scan the real user packages, recycle and restore a folder through the real Recycle Bin, run the batch files, and build the app's window (`WinPkgScan-App.ps1 -SelfTest`).
+- **App tests** load the app with `-TestMode`, which defines its functions without a window, so its logic is tested on any system.
 - **CI** (`.github/workflows/ci.yml`) runs on every branch push and pull request: lint on Ubuntu, tests on Windows with PowerShell 5.1 and 7. Test results are uploaded as a build artifact.
 - **Dependabot** (`.github/dependabot.yml`) opens a pull request when a GitHub Action used by the workflows has a new version.
 
 ### Releasing
 
-1. Update the version in all three scripts, in both places in each: the `Version:` help line and `$ScriptVersion`.
+1. Update the version in all four scripts: the `Version:` help line and `$ScriptVersion` (`$AppVersion` in the app).
 2. Add a `## [X.Y.Z] - YYYY-MM-DD` section at the top of `CHANGELOG.md`.
 3. Merge to `main` through a pull request, with CI green.
 4. Tag and push:
@@ -274,9 +306,9 @@ Run lint and tests:
    git push origin vX.Y.Z
    ```
 
-The **Release** workflow (`.github/workflows/release.yml`) then runs the full CI. If CI passes, it builds the zip (the three scripts, the four batch files, the exclude file, README and LICENSE) and a SHA256 checksum, and publishes a GitHub Release. The release notes come from the CHANGELOG. The release fails if the tag does not match the script version or the CHANGELOG has no section for it.
+The **Release** workflow (`.github/workflows/release.yml`) then runs the full CI. If CI passes, it builds the zip (the four scripts, the five batch files, the exclude file, README and LICENSE) and a SHA256 checksum, and publishes a GitHub Release. The release notes come from the CHANGELOG. The release fails if the tag does not match the script version or the CHANGELOG has no section for it.
 
-Do not create the release by hand on GitHub: the workflow makes it. If one was made by hand anyway, or a release run failed, go to **Actions > Release > Run workflow**, enter the tag (e.g. `v1.6.0`), and run it. It attaches the zip and checksum to the existing release and replaces its title and notes.
+Do not create the release by hand on GitHub: the workflow makes it. If one was made by hand anyway, or a release run failed, go to **Actions > Release > Run workflow**, enter the tag (e.g. `v1.7.0`), and run it. It attaches the zip and checksum to the existing release and replaces its title and notes.
 
 ## License
 

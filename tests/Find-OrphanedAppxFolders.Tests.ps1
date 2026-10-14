@@ -52,6 +52,7 @@ BeforeAll {
         $Params['NoPause'] = $true
         if (-not $Params.ContainsKey('ExcludeFile')) { $Params['ExcludeFile'] = $script:EmptyExclude }
         if (-not $Params.ContainsKey('AdminChecks')) { $Params['AdminChecks'] = 'Off' }
+        if (-not $Params.ContainsKey('NoHistory')) { $Params['NoHistory'] = $true }
         & $script:ScriptPath @Params 6>&1 | Out-Null
         return $LASTEXITCODE
     }
@@ -287,6 +288,70 @@ Describe 'Scanning (mocked AppX packages)' {
             Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; AdminChecks = 'On' } | Should -Be 0
             (Get-Content -LiteralPath $ReportPath -Raw) | Should -Match 'Administrator checks:\s+failed'
             @(Import-Csv -LiteralPath $CsvPath).FolderName | Should -Contain 'Staged.App_abc123def4567'
+        }
+    }
+
+    Context 'scan history' {
+
+        BeforeEach {
+            $script:HistoryFile = Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'history.json'
+        }
+
+        It 'records each scan, with the folders found' {
+            Invoke-Scan @{ ReportPath = $ReportPath; NoHistory = $false } | Should -Be 0
+            $HistoryFile | Should -Exist
+            $h = Get-Content -LiteralPath $HistoryFile -Raw | ConvertFrom-Json
+            @($h.Scans).Count | Should -Be 1
+            @($h.Scans)[0].Folders | Should -Contain 'Contoso.Old_abc123def4567'
+            @($h.Scans)[0].Orphans | Should -Be 2
+        }
+
+        It 'marks nothing as new on the first scan' {
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; NoHistory = $false } | Should -Be 0
+            @(Import-Csv -LiteralPath $CsvPath | Where-Object New -eq 'Yes').Count | Should -Be 0
+            (Get-Content -LiteralPath $ReportPath -Raw) | Should -Match 'New since last scan:\s+first scan'
+        }
+
+        It 'flags only folders that are new since the last scan' {
+            Invoke-Scan @{ ReportPath = $ReportPath; NoHistory = $false } | Should -Be 0
+            New-PackageFolder -Name 'Brand.New_abc123def4567'
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; Html = $true; NoHistory = $false } | Should -Be 0
+            @(Import-Csv -LiteralPath $CsvPath | Where-Object New -eq 'Yes').FolderName | Should -Be 'Brand.New_abc123def4567'
+            (Get-Content -LiteralPath $ReportPath -Raw) | Should -Match 'New since last scan:\s+1 \(last scan'
+            (Get-Content -LiteralPath ([System.IO.Path]::ChangeExtension($ReportPath, '.html')) -Raw) |
+                Should -Match 'Brand\.New_abc123def4567 <span class="new">New</span>'
+        }
+
+        It 'reports the space freed, minus restores' {
+            New-Item -ItemType Directory -Path (Split-Path $HistoryFile) -Force | Out-Null
+            '{"Version":1,"Scans":[],"Removals":[{"FreedMB":10},{"FreedMB":0.5}],"Restores":[{"SizeMB":3}]}' |
+                Set-Content -LiteralPath $HistoryFile
+            Invoke-Scan @{ ReportPath = $ReportPath; NoHistory = $false } | Should -Be 0
+            (Get-Content -LiteralPath $ReportPath -Raw) | Should -Match 'Freed with WinPkgScan:\s+7\.5 MB'
+        }
+
+        It 'keeps only the last 50 scans' {
+            New-Item -ItemType Directory -Path (Split-Path $HistoryFile) -Force | Out-Null
+            $old = 1..55 | ForEach-Object { [pscustomobject]@{ Time = "old $_"; Folders = @() } }
+            ConvertTo-Json -InputObject ([ordered]@{ Version = 1; Scans = $old; Removals = @(); Restores = @() }) -Depth 5 |
+                Set-Content -LiteralPath $HistoryFile
+            Invoke-Scan @{ ReportPath = $ReportPath; NoHistory = $false } | Should -Be 0
+            $h = Get-Content -LiteralPath $HistoryFile -Raw | ConvertFrom-Json
+            @($h.Scans).Count | Should -Be 50
+            @($h.Scans)[0].Time | Should -Be 'old 7'
+        }
+
+        It 'starts again, keeping a copy, when the history cannot be read' {
+            New-Item -ItemType Directory -Path (Split-Path $HistoryFile) -Force | Out-Null
+            Set-Content -LiteralPath $HistoryFile -Value '{ this is not json'
+            Invoke-Scan @{ ReportPath = $ReportPath; NoHistory = $false } | Should -Be 0
+            "$HistoryFile.bad" | Should -Exist
+            @((Get-Content -LiteralPath $HistoryFile -Raw | ConvertFrom-Json).Scans).Count | Should -Be 1
+        }
+
+        It 'does not touch the history with -NoHistory' {
+            Invoke-Scan @{ ReportPath = $ReportPath; NoHistory = $true } | Should -Be 0
+            $HistoryFile | Should -Not -Exist
         }
     }
 

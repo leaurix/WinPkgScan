@@ -54,6 +54,11 @@
     Auto (default): run the extra checks when running as administrator.
     On: always try them (a warning is shown if they fail). Off: never.
 
+.PARAMETER NoHistory
+    Do not read or update the scan history. The history is kept in
+    %LOCALAPPDATA%\WinPkgScan\history.json and is used to show which
+    folders are new since the last scan and how much space was freed.
+
 .EXAMPLE
     .\Find-OrphanedAppxFolders.ps1
 
@@ -64,7 +69,7 @@
     .\Find-OrphanedAppxFolders.ps1 -Csv -Html -Open -Exclude '*Teams*'
 
 .NOTES
-    Version: 1.6.0
+    Version: 1.7.0
 #>
 
 [CmdletBinding()]
@@ -77,10 +82,11 @@ param(
     [string[]]$Exclude,
     [string]$ExcludeFile,
     [ValidateSet('Auto', 'On', 'Off')]
-    [string]$AdminChecks = 'Auto'
+    [string]$AdminChecks = 'Auto',
+    [switch]$NoHistory
 )
 
-$ScriptVersion = "1.6.0"
+$ScriptVersion = "1.7.0"
 $PauseAtEnd    = -not $NoPause.IsPresent
 
 function Exit-Script {
@@ -100,7 +106,7 @@ function Write-ResultTable {
         Format-Table FolderName,
             @{Name = "Size (MB)"; Expression = { $_.SizeMB }},
             @{Name = "Last Modified"; Expression = { $_.LastModified }},
-            Notes -AutoSize |
+            New, Notes -AutoSize |
         Out-String -Width 250 |
         Write-Host
 }
@@ -129,6 +135,9 @@ function Add-ReportSection {
         $Report.Add("Status        : $($Item.Status)")
         if ($Item.Notes) {
             $Report.Add("Notes         : $($Item.Notes)")
+        }
+        if ($Item.New -eq 'Yes') {
+            $Report.Add("New           : yes, not found in the last scan")
         }
         $Report.Add("")
     }
@@ -206,6 +215,8 @@ h1 { font-size:22px; margin:0 0 4px; }
 .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
 .tile b { display:block; font-size:22px; }
 .tile span { color:var(--muted); font-size:12px; }
+.new { display:inline-block; margin-left:6px; padding:0 6px; border-radius:6px; font-size:11px;
+       background:var(--accent); color:#fff; vertical-align:1px; }
 .note { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--warn);
         border-radius:8px; padding:10px 14px; margin-bottom:20px; }
 .note ol { margin:6px 0 0; padding-left:20px; }
@@ -284,7 +295,8 @@ footer { color:var(--muted); font-size:12px; margin-top:32px; }
                 if ($markable) {
                     [void]$sb.Append("<td class=`"sel`"><input type=`"checkbox`" class=`"mark`" aria-label=`"Mark $(ConvertTo-HtmlText $i.FolderName)`"></td>")
                 }
-                [void]$sb.Append("<td>$(ConvertTo-HtmlText $i.FolderName)</td><td class=`"num`" data-v=`"$size`">$size</td><td>$(ConvertTo-HtmlText $i.LastModified)</td><td class=`"notes`">$(ConvertTo-HtmlText $i.Notes)</td><td class=`"path`">$(ConvertTo-HtmlText $i.FullPath)</td></tr>`n")
+                $badge = if ($i.New -eq 'Yes') { ' <span class="new">New</span>' } else { '' }
+                [void]$sb.Append("<td>$(ConvertTo-HtmlText $i.FolderName)$badge</td><td class=`"num`" data-v=`"$size`">$size</td><td>$(ConvertTo-HtmlText $i.LastModified)</td><td class=`"notes`">$(ConvertTo-HtmlText $i.Notes)</td><td class=`"path`">$(ConvertTo-HtmlText $i.FullPath)</td></tr>`n")
             }
             [void]$sb.Append("</tbody></table>`n")
         }
@@ -460,6 +472,62 @@ function Get-AdminPackageInfo {
     }
 }
 
+function Get-HistoryPath {
+    return Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'history.json'
+}
+
+function Read-History {
+    # Scan history: past scans (with folder names), removals and restores.
+    param([string]$Path)
+    $history = [PSCustomObject]@{ Scans = @(); Removals = @(); Restores = @() }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $history }
+    try {
+        $text = [System.IO.File]::ReadAllText($Path)
+        if ($text.Trim()) {
+            $data = $text | ConvertFrom-Json -ErrorAction Stop
+            if ($data.Scans)    { $history.Scans    = @($data.Scans) }
+            if ($data.Removals) { $history.Removals = @($data.Removals) }
+            if ($data.Restores) { $history.Restores = @($data.Restores) }
+        }
+    }
+    catch {
+        Write-Host "WARNING: The scan history could not be read, so it starts again: $($_.Exception.Message)" -ForegroundColor Yellow
+        try {
+            Copy-Item -LiteralPath $Path -Destination "$Path.bad" -Force -ErrorAction Stop -WhatIf:$false -Confirm:$false
+        }
+        catch {
+            Write-Verbose "Could not keep a copy of the unreadable history: $($_.Exception.Message)"
+        }
+    }
+    return $history
+}
+
+function Save-History {
+    param($History, [string]$Path)
+    $dir = Split-Path -Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false -Confirm:$false | Out-Null
+    }
+    $data = [ordered]@{
+        Version  = 1
+        Scans    = @(@($History.Scans)    | Select-Object -Last 50)
+        Removals = @(@($History.Removals) | Select-Object -Last 1000)
+        Restores = @(@($History.Restores) | Select-Object -Last 1000)
+    }
+    $json = ConvertTo-Json -InputObject $data -Depth 6
+    [System.IO.File]::WriteAllText($Path, $json, (New-Object System.Text.UTF8Encoding($true)))
+}
+
+function Get-FreedMB {
+    # Space freed with WinPkgScan: removals minus restores.
+    param($History)
+    $freed = 0.0
+    foreach ($r in @($History.Removals)) { if ($r) { $freed += [double]$r.FreedMB } }
+    foreach ($r in @($History.Restores)) { if ($r) { $freed -= [double]$r.SizeMB } }
+    if ($freed -lt 0) { $freed = 0 }
+    return [math]::Round($freed, 2)
+}
+
 $PackagesPath = Join-Path $env:LOCALAPPDATA "Packages"
 
 # Package folders end in "_" + a 13-character publisher ID
@@ -574,6 +642,18 @@ $Folders = @(
     Get-ChildItem -LiteralPath $PackagesPath -Directory -Force -ErrorAction SilentlyContinue
 )
 
+# Scan history: which folders were found last time.
+$History   = $null
+$PrevScan  = $null
+$PrevNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+if (-not $NoHistory) {
+    $History  = Read-History -Path (Get-HistoryPath)
+    $PrevScan = @($History.Scans) | Select-Object -Last 1
+    if ($PrevScan) {
+        foreach ($n in @($PrevScan.Folders)) { if ($n) { [void]$PrevNames.Add("$n") } }
+    }
+}
+
 $Results  = New-Object System.Collections.Generic.List[object]
 $Excluded = New-Object System.Collections.Generic.List[string]
 $KeptByAdminCheck = 0
@@ -642,6 +722,7 @@ foreach ($Folder in $Folders) {
             FullPath     = $Folder.FullName
             Status       = $Status
             Notes        = ($NoteParts -join '; ')
+            New          = if ($PrevScan -and -not $PrevNames.Contains($Folder.Name)) { 'Yes' } else { '' }
         }
     )
 }
@@ -659,6 +740,12 @@ $OrphanMB = Get-TotalMB $Orphans
 $WinMB    = Get-TotalMB $WinParts
 $OtherMB  = Get-TotalMB $Others
 
+$NewCount = @(@($Orphans) + @($Others) | Where-Object { $_.New -eq 'Yes' }).Count
+if ($History) {
+    $NewText   = if ($PrevScan) { "$NewCount (last scan $($PrevScan.Time))" } else { "first scan" }
+    $FreedText = "$(Get-FreedMB $History) MB"
+}
+
 # ------------------------------------------------------------
 # Console output
 # ------------------------------------------------------------
@@ -675,6 +762,10 @@ Write-Host "Other folders:            $($Others.Count) ($OtherMB MB)"
 Write-Host "Excluded:                 $($Excluded.Count)"
 if ($AdminInfo) {
     Write-Host "Kept by admin checks:     $KeptByAdminCheck"
+}
+if ($History) {
+    Write-Host "New since last scan:      $NewText"
+    Write-Host "Freed with WinPkgScan:    $FreedText"
 }
 Write-Host ""
 
@@ -727,6 +818,10 @@ if ($AdminInfo) {
 if ($ExcludePatterns.Count -gt 0) {
     $Report.Add("Exclude patterns:         $($ExcludePatterns -join ', ')")
 }
+if ($History) {
+    $Report.Add("New since last scan:      $NewText")
+    $Report.Add("Freed with WinPkgScan:    $FreedText")
+}
 $Report.Add("")
 $Report.Add("IMPORTANT:")
 $Report.Add("This is an identification report only.")
@@ -763,13 +858,13 @@ try {
 
     if ($Csv) {
         $CsvRows = @(@($Orphans) + @($WinParts) + @($Others) |
-            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status, Notes)
+            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status, Notes, New)
         if ($CsvRows.Count -gt 0) {
             $CsvRows | Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8 -Force -ErrorAction Stop
         }
         else {
             # Nothing found: still write the header row, so the file is a valid CSV.
-            '"Delete","Category","FolderName","SizeMB","LastModified","FullPath","Status","Notes"' |
+            '"Delete","Category","FolderName","SizeMB","LastModified","FullPath","Status","Notes","New"' |
                 Out-File -LiteralPath $CsvPath -Encoding UTF8 -Force -ErrorAction Stop
         }
         Write-Host "CSV created:" -ForegroundColor Green
@@ -784,6 +879,10 @@ try {
             [PSCustomObject]@{ Label = "Excluded"; Value = "$($Excluded.Count)" }
             [PSCustomObject]@{ Label = "Registered packages"; Value = "$($InstalledFamilyNames.Count)" }
         )
+        if ($History) {
+            $tiles += [PSCustomObject]@{ Label = "New since last scan"; Value = $(if ($PrevScan) { "$NewCount" } else { "First scan" }) }
+            $tiles += [PSCustomObject]@{ Label = "Freed with WinPkgScan"; Value = $FreedText }
+        }
         $sections = @(
             [PSCustomObject]@{ Kind = 'orphan'; Title = 'Orphaned package folders'; Items = $Orphans; TotalMB = $OrphanMB
                                Note = 'Named like an app package but not registered for this user. Main cleanup candidates: check each one first.' }
@@ -815,6 +914,26 @@ catch {
     Write-Host ""
     Write-Host "Nothing was deleted or modified." -ForegroundColor Green
     Exit-Script 1
+}
+
+# Remember this scan, for "new since last scan" next time.
+if ($History) {
+    try {
+        $History.Scans = @(@($History.Scans) + [PSCustomObject]@{
+            Time     = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+            Version  = $ScriptVersion
+            Orphans  = $Orphans.Count
+            OrphanMB = $OrphanMB
+            Windows  = $WinParts.Count
+            Other    = $Others.Count
+            Excluded = $Excluded.Count
+            Folders  = @(@($Orphans) + @($WinParts) + @($Others) | ForEach-Object { $_.FolderName })
+        })
+        Save-History -History $History -Path (Get-HistoryPath)
+    }
+    catch {
+        Write-Host "WARNING: Could not save the scan history: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 }
 
 Write-Host ""

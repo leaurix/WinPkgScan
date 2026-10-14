@@ -103,6 +103,7 @@ BeforeAll {
         $Params['NoPause'] = $true
         if (-not $Params.ContainsKey('ExcludeFile')) { $Params['ExcludeFile'] = $script:EmptyExclude }
         if (-not $Params.ContainsKey('AdminChecks')) { $Params['AdminChecks'] = 'Off' }
+        if (-not $Params.ContainsKey('NoHistory')) { $Params['NoHistory'] = $true }
         if (-not $Params.ContainsKey('CsvPath')) { $Params['CsvPath'] = $script:CsvPath }
         if (-not $Params.ContainsKey('LogPath')) { $Params['LogPath'] = $script:LogPath }
         if (-not ($Params.ContainsKey('WhatIf') -or $Params.ContainsKey('Confirm') -or $Params.ContainsKey('Force'))) {
@@ -177,6 +178,25 @@ Describe 'Removing (mocked AppX packages)' {
         $script:DirB     = New-PackageFolder -Name $OrphanB -Bytes 1MB
         $script:DirOther = New-PackageFolder -Name $Other
         $script:DirInst  = New-PackageFolder -Name $Installed
+    }
+
+    Context 'scan history' {
+
+        It 'records the space freed' {
+            New-TestCsv -Marked $OrphanA
+            (Invoke-Remove @{ Permanent = $true; NoHistory = $false }).ExitCode | Should -Be 0
+            $file = Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'history.json'
+            $h = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+            @($h.Removals).Count | Should -Be 1
+            @($h.Removals)[0].FreedMB | Should -Be 3
+            @($h.Removals)[0].Mode | Should -Be 'Deleted'
+        }
+
+        It 'records nothing with -WhatIf' {
+            New-TestCsv -Marked $OrphanA
+            Invoke-Remove @{ Permanent = $true; WhatIf = $true; NoHistory = $false } | Out-Null
+            Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'history.json' | Should -Not -Exist
+        }
     }
 
     Context 'deleting' {
@@ -606,21 +626,21 @@ Describe 'Recycle Bin and batch files on Windows' -Tag 'Integration' -Skip:(-not
 
     It 'Run-Scan.bat saves a CSV by default' {
         $report = Join-Path $WorkDir 'bat-scan.txt'
-        & (Join-Path $RepoRoot 'Run-Scan.bat') -NoPause -ReportPath $report | Out-Null
+        & (Join-Path $RepoRoot 'Run-Scan.bat') -NoPause -NoHistory -ReportPath $report | Out-Null
         $LASTEXITCODE | Should -Be 0
         [System.IO.Path]::ChangeExtension($report, '.csv') | Should -Exist
     }
 
     It 'Run-Scan.bat accepts -Csv without passing it twice' {
         $report = Join-Path $WorkDir 'bat-scan2.txt'
-        & (Join-Path $RepoRoot 'Run-Scan.bat') -Csv -NoPause -ReportPath $report | Out-Null
+        & (Join-Path $RepoRoot 'Run-Scan.bat') -Csv -NoPause -NoHistory -ReportPath $report | Out-Null
         $LASTEXITCODE | Should -Be 0
         [System.IO.Path]::ChangeExtension($report, '.csv') | Should -Exist
     }
 
     It 'Run-Delete.bat deletes the marked folder' {
         New-TestCsv -Marked $OrphanB
-        & (Join-Path $RepoRoot 'Run-Delete.bat') $CsvPath -Permanent -Force -NoPause -LogPath $LogPath | Out-Null
+        & (Join-Path $RepoRoot 'Run-Delete.bat') $CsvPath -Permanent -Force -NoPause -NoHistory -LogPath $LogPath | Out-Null
         $LASTEXITCODE | Should -Be 0
         $DirB | Should -Not -Exist
         $DirA | Should -Exist

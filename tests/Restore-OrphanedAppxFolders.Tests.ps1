@@ -50,6 +50,7 @@ BeforeAll {
     function Invoke-Restore {
         param([hashtable]$Params = @{})
         $Params['NoPause'] = $true
+        if (-not $Params.ContainsKey('NoHistory')) { $Params['NoHistory'] = $true }
         # Join the lines ourselves: Out-String in Windows PowerShell 5.1 wraps
         # long lines at the console width, which would split long paths.
         $out  = (& $script:RestorePath @Params 6>&1 | ForEach-Object { "$_" }) -join "`n"
@@ -148,7 +149,7 @@ Describe 'Restore on Windows: Recycle Bin round trip' -Tag 'Integration' -Skip:(
         [pscustomobject]@{ Delete = 'Yes'; FolderName = $Name; FullPath = $Dir } |
             Export-Csv -LiteralPath $csv -NoTypeInformation -Encoding UTF8
         $script:Log = Join-Path $WorkDir 'WinPkgScan-DeleteLog-20261008-100000.csv'
-        & $RemovePath -CsvPath $csv -LogPath $Log -Force -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off 6>&1 | Out-Null
+        & $RemovePath -CsvPath $csv -LogPath $Log -Force -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -NoHistory 6>&1 | Out-Null
     }
 
     AfterEach {
@@ -167,11 +168,14 @@ Describe 'Restore on Windows: Recycle Bin round trip' -Tag 'Integration' -Skip:(
         Invoke-Restore @{ LogPath = $Log } | Out-Null
     }
 
-    It 'puts the folder and its files back' {
-        $r = Invoke-Restore @{ LogPath = $Log }
+    It 'puts the folder and its files back, and records it in the history' {
+        $r = Invoke-Restore @{ LogPath = $Log; NoHistory = $false }
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Match 'Restored: 1'
         Join-Path $Dir 'LocalState\settings.dat' | Should -Exist
+        $h = Get-Content -LiteralPath (Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'history.json') -Raw | ConvertFrom-Json
+        @($h.Restores).Count | Should -Be 1
+        @($h.Restores)[0].Folders | Should -Be 1
     }
 
     It 'skips a folder when something already exists at the path' {
@@ -192,7 +196,7 @@ Describe 'WinPkgScan.bat direct commands on Windows' -Tag 'Integration' -Skip:(-
 
     It 'scans with "scan"' {
         $report = Join-Path $TestDrive 'menu-scan.txt'
-        & $MenuPath scan -ReportPath $report | Out-Null
+        & $MenuPath scan -NoHistory -ReportPath $report | Out-Null
         $LASTEXITCODE | Should -Be 0
         [System.IO.Path]::ChangeExtension($report, '.csv') | Should -Exist
         [System.IO.Path]::ChangeExtension($report, '.html') | Should -Exist
@@ -200,7 +204,7 @@ Describe 'WinPkgScan.bat direct commands on Windows' -Tag 'Integration' -Skip:(-
 
     It 'previews with "preview" without deleting anything' {
         $report = Join-Path $TestDrive 'menu-prev.txt'
-        & $MenuPath scan -ReportPath $report | Out-Null
+        & $MenuPath scan -NoHistory -ReportPath $report | Out-Null
         $csv = [System.IO.Path]::ChangeExtension($report, '.csv')
         & $MenuPath preview -CsvPath $csv -LogPath (Join-Path $TestDrive 'menu-log.csv') | Out-Null
         $LASTEXITCODE | Should -Be 0

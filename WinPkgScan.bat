@@ -71,11 +71,12 @@ echo   5  Delete marked folders - Recycle Bin, asks before each one
 echo   6  Restore folders from the last delete
 echo   7  Edit exclusions
 echo   8  Help - README
+echo   9  Open the WinPkgScan app - preview
 echo   0  Exit
 echo.
 echo   To mark folders: tick them in the HTML report and click Save marked CSV.
 echo.
-choice /c 123456780 /n /m "  Choose 1-8, or 0 to exit: "
+choice /c 1234567890 /n /m "  Choose 1-9, or 0 to exit: "
 set "PICK=%ERRORLEVEL%"
 echo.
 if "%PICK%"=="1" goto m_scan
@@ -86,6 +87,7 @@ if "%PICK%"=="5" goto m_delete
 if "%PICK%"=="6" goto m_restore
 if "%PICK%"=="7" goto m_exclude
 if "%PICK%"=="8" goto m_help
+if "%PICK%"=="9" goto m_app
 goto end
 
 :m_scan
@@ -127,6 +129,14 @@ goto menu
 :m_help
 start "" notepad.exe "%HERE%README.md"
 goto menu
+
+:m_app
+if not exist "%HERE%WinPkgScan-App.ps1" goto m_app_missing
+start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%HERE%WinPkgScan-App.ps1"
+goto menu
+:m_app_missing
+echo WinPkgScan-App.ps1 was not found next to this file.
+goto back
 
 :back
 echo.

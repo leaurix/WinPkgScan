@@ -67,6 +67,11 @@
 .PARAMETER Force
     Do not ask before each folder (same as -Confirm:$false). Use with care.
 
+.PARAMETER NoHistory
+    Do not record this run in the scan history
+    (%LOCALAPPDATA%\WinPkgScan\history.json), which keeps the total
+    space freed with WinPkgScan.
+
 .PARAMETER NoPause
     Skip the "Press Enter to exit" prompt. For scheduled/unattended runs.
 
@@ -83,7 +88,7 @@
     Unattended run: no prompts.
 
 .NOTES
-    Version: 1.6.0
+    Version: 1.7.0
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -113,10 +118,12 @@ param(
 
     [switch]$Force,
 
+    [switch]$NoHistory,
+
     [switch]$NoPause
 )
 
-$ScriptVersion = "1.6.0"
+$ScriptVersion = "1.7.0"
 $PauseAtEnd    = -not $NoPause.IsPresent
 
 # -Force skips the per-folder prompt, unless -Confirm was given explicitly.
@@ -340,6 +347,62 @@ function Read-CsvFile {
         $rows = @($text | ConvertFrom-Csv -Delimiter ';')
     }
     return , $rows
+}
+
+function Get-HistoryPath {
+    return Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'history.json'
+}
+
+function Read-History {
+    # Scan history: past scans (with folder names), removals and restores.
+    param([string]$Path)
+    $history = [PSCustomObject]@{ Scans = @(); Removals = @(); Restores = @() }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $history }
+    try {
+        $text = [System.IO.File]::ReadAllText($Path)
+        if ($text.Trim()) {
+            $data = $text | ConvertFrom-Json -ErrorAction Stop
+            if ($data.Scans)    { $history.Scans    = @($data.Scans) }
+            if ($data.Removals) { $history.Removals = @($data.Removals) }
+            if ($data.Restores) { $history.Restores = @($data.Restores) }
+        }
+    }
+    catch {
+        Write-Host "WARNING: The scan history could not be read, so it starts again: $($_.Exception.Message)" -ForegroundColor Yellow
+        try {
+            Copy-Item -LiteralPath $Path -Destination "$Path.bad" -Force -ErrorAction Stop -WhatIf:$false -Confirm:$false
+        }
+        catch {
+            Write-Verbose "Could not keep a copy of the unreadable history: $($_.Exception.Message)"
+        }
+    }
+    return $history
+}
+
+function Save-History {
+    param($History, [string]$Path)
+    $dir = Split-Path -Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false -Confirm:$false | Out-Null
+    }
+    $data = [ordered]@{
+        Version  = 1
+        Scans    = @(@($History.Scans)    | Select-Object -Last 50)
+        Removals = @(@($History.Removals) | Select-Object -Last 1000)
+        Restores = @(@($History.Restores) | Select-Object -Last 1000)
+    }
+    $json = ConvertTo-Json -InputObject $data -Depth 6
+    [System.IO.File]::WriteAllText($Path, $json, (New-Object System.Text.UTF8Encoding($true)))
+}
+
+function Get-FreedMB {
+    # Space freed with WinPkgScan: removals minus restores.
+    param($History)
+    $freed = 0.0
+    foreach ($r in @($History.Removals)) { if ($r) { $freed += [double]$r.FreedMB } }
+    foreach ($r in @($History.Restores)) { if ($r) { $freed -= [double]$r.SizeMB } }
+    if ($freed -lt 0) { $freed = 0 }
+    return [math]::Round($freed, 2)
 }
 
 $PackagesPath = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "Packages"))
@@ -675,6 +738,25 @@ if ($WhatIfPreference) {
 Write-Host "Skipped:              $(Get-ActionCount 'Skipped')"
 Write-Host "Failed:               $FailedCount"
 Write-Host "Space freed:          $FreedMB MB"
+
+# Add this run to the scan history (total space freed with WinPkgScan).
+if (-not $NoHistory -and -not $WhatIfPreference -and $Removed.Count -gt 0) {
+    try {
+        $HistoryPath = Get-HistoryPath
+        $History = Read-History -Path $HistoryPath
+        $History.Removals = @(@($History.Removals) + [PSCustomObject]@{
+            Time    = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+            Folders = $Removed.Count
+            FreedMB = $FreedMB
+            Mode    = if ($Permanent) { 'Deleted' } else { 'Recycled' }
+        })
+        Save-History -History $History -Path $HistoryPath
+        Write-Host "Freed with WinPkgScan so far: $(Get-FreedMB $History) MB"
+    }
+    catch {
+        Write-Host "WARNING: Could not update the scan history: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($LogPath)) {
     $csvDir  = Split-Path -Path ([System.IO.Path]::GetFullPath($CsvPath)) -Parent
