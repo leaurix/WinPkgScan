@@ -9,7 +9,7 @@ Finds leftover app folders in `%LOCALAPPDATA%\Packages` whose app is no longer i
 - **You choose what goes.** Tick folders in the HTML report, or mark them in the CSV.
 - **The remover re-checks every folder,** moves it to the Recycle Bin, and logs what it did.
 - **Restore puts them back** from the Recycle Bin, using that log.
-- **New: the WinPkgScan app (preview)** does all of this in one window.
+- **The WinPkgScan app** does all of this in one window, with settings, dark mode and a history of the space freed.
 
 ![HTML report](docs/report.png)
 
@@ -17,23 +17,37 @@ Finds leftover app folders in `%LOCALAPPDATA%\Packages` whose app is no longer i
 
 1. Download `WinPkgScan-vX.Y.Z.zip` from the [latest release](https://github.com/leaurix/WinPkgScan/releases/latest).
 2. Right-click the zip > **Properties** > tick **Unblock** > **OK**. This stops Windows from warning about files downloaded from the internet.
-3. Extract it and double-click `WinPkgScan-App.bat` for the app, or `WinPkgScan.bat` for the menu.
+3. Extract it and double-click `Install.bat`. It installs the app with a **WinPkgScan** shortcut in the Start menu and on the desktop, and starts it. See [Installing](#installing).
+
+To use it without installing, double-click `WinPkgScan-App.bat` for the app, or `WinPkgScan.bat` for the menu.
 
 Optional: check the download is intact. The hash must match the `.sha256` file on the release page.
 
 ```powershell
-Get-FileHash .\WinPkgScan-v1.7.0.zip -Algorithm SHA256
+Get-FileHash .\WinPkgScan-v1.8.0.zip -Algorithm SHA256
 ```
+
+### From the PowerShell Gallery
+
+```powershell
+Install-Module WinPkgScan -Scope CurrentUser
+
+Start-WinPkgScanApp                          # open the app
+Find-OrphanedAppxFolders -Csv -Html -Open    # scan from the prompt
+Install-WinPkgScan                           # add the Start menu and desktop shortcuts
+```
+
+If PowerShell asks to install the NuGet provider or to trust PSGallery, answer `Y`. The commands are the scripts below, with the same options. `Get-Help Find-OrphanedAppxFolders -Full` shows them all.
 
 ## Why
 
 When a Microsoft Store (AppX/MSIX) app is removed, its data folder in `AppData\Local\Packages` is sometimes left behind. Over time these folders can take up significant disk space. WinPkgScan finds them and lets you clean them up safely.
 
-## The app (preview)
+## The app
 
-Double-click `WinPkgScan-App.bat`.
+Start **WinPkgScan** from the Start menu (after `Install.bat`), or double-click `WinPkgScan-App.bat`.
 
-1. **Scan**, or **Scan as administrator** for the extra checks.
+1. **Scan** (or press F5), or **Scan as administrator** for the extra checks. The bar at the bottom shows how many folders have been scanned.
 2. The cards show orphaned folders, folders **new since the last scan**, Windows components, other folders, and the space freed with WinPkgScan so far.
 3. **Show** switches between orphaned folders, new folders and all folders. **Filter** finds a name or note. Double-click a row to open its folder.
 4. Tick the orphaned folders to remove, or **Mark all shown**. Windows components and other folders cannot be ticked.
@@ -43,7 +57,39 @@ Double-click `WinPkgScan-App.bat`.
 
 The app runs the same scripts as the menu, so the results and the safety checks are the same. It keeps its own scan, logs and report in `%LOCALAPPDATA%\WinPkgScan\app` and does not touch the files on your Desktop. **Open HTML report** opens the app's report.
 
-This is a preview: it works, but its look and features may change. Tell us what you would like it to do.
+### Settings
+
+| Setting | What it does |
+|---|---|
+| **Skip folders changed in the last ... days** | A folder with anything changed more recently is never removed. Default `30`. `0` turns it off. |
+| **Administrator checks** | `Auto` runs them when the scan runs as administrator, `On` always tries them, `Off` never does. |
+| **Theme** | `System` follows the Windows app mode. Or always `Light` or `Dark`. |
+| **Exclude list** | Folders matching a line are left out of scans and never removed. |
+
+Settings are saved in `%LOCALAPPDATA%\WinPkgScan\settings.json`, and the exclude list in `%LOCALAPPDATA%\WinPkgScan\exclude.txt`. The scripts read that exclude list too, so it applies everywhere.
+
+### History
+
+The **History** tab lists every scan, removal and restore, with the totals and a chart of the space freed over time. It reads the [scan history](#scan-history), so runs from the menu and the scripts are included.
+
+## Installing
+
+`Install.bat` installs WinPkgScan for you only. No administrator rights are needed.
+
+- Copies the files to `%LOCALAPPDATA%\Programs\WinPkgScan`.
+- Adds a **WinPkgScan** shortcut to the Start menu and the desktop.
+- Adds WinPkgScan to **Settings > Apps**, so you can uninstall it there.
+
+To update, run `Install.bat` from a newer download. Your exclude list is kept.
+
+```bat
+Install.bat                       :: install or update, then start the app
+Install.bat -NoDesktopShortcut    :: Start menu shortcut only
+Install.bat -Uninstall            :: remove it (or use Settings > Apps)
+Install.bat -Uninstall -RemoveData
+```
+
+Uninstalling removes only the WinPkgScan files, the shortcuts and the Settings entry. Your history, settings and exclude list in `%LOCALAPPDATA%\WinPkgScan` are kept unless you add `-RemoveData`. `-WhatIf` shows what would happen, and `-InstallPath` installs somewhere else.
 
 ## Quick start (menu)
 
@@ -58,7 +104,7 @@ Double-click `WinPkgScan.bat` and use the menu:
   6  Restore folders from the last delete
   7  Edit exclusions
   8  Help - README
-  9  Open the WinPkgScan app - preview
+  9  Open the WinPkgScan app
   0  Exit
 ```
 
@@ -111,9 +157,12 @@ They run automatically when the scan runs as administrator. Use `-AdminChecks Of
 
 | File | Purpose |
 |---|---|
-| `WinPkgScan-App.bat` | **Start here.** Opens the WinPkgScan app (preview). |
+| `Install.bat` | **Start here.** Installs the app with Start menu and desktop shortcuts. |
+| `WinPkgScan-App.bat` | Opens the WinPkgScan app without installing. |
 | `WinPkgScan.bat` | Menu for scan, report, preview, delete, restore and exclusions. |
 | `WinPkgScan-App.ps1` | The app (Windows window on top of the scripts) |
+| `Install.ps1` | The installer and uninstaller |
+| `WinPkgScan.ico` | The app icon |
 | `Find-OrphanedAppxFolders.ps1` | The scanner (read-only) |
 | `Remove-OrphanedAppxFolders.ps1` | The remover |
 | `Restore-OrphanedAppxFolders.ps1` | Puts removed folders back from the Recycle Bin |
@@ -122,7 +171,7 @@ They run automatically when the scan runs as administrator. Use `-AdminChecks Of
 | `Run-Delete.bat` | Remove the marked folders, or drag a CSV onto it. |
 | `WinPkgScan.exclude.txt` | Your exclude list. One folder name or wildcard pattern per line. |
 
-Keep these files in the same folder. The other files (`tests/`, `docs/`, `build.ps1`, `.github/`) are only for development.
+Keep these files in the same folder. The other files (`tests/`, `docs/`, `module/`, `build.ps1`, `.github/`) are only for development.
 
 ### Direct commands
 
@@ -151,15 +200,16 @@ powershell -ExecutionPolicy Bypass -File .\Find-OrphanedAppxFolders.ps1 -Csv -Ht
 
 | Parameter | Description |
 |---|---|
-| `-NoPause` | Skip the "Press Enter to exit" prompt. Use for scheduled or unattended runs. |
+| `-NoPause` | Never wait for Enter at the end. Without it, the script only waits when it opened its own window (a batch file or "Run with PowerShell"), never at a PowerShell prompt. |
 | `-ReportPath <path>` | Save the report to a custom location instead of the Desktop. |
 | `-Csv` | Also save the results as a CSV next to the report. |
 | `-Html` | Also save the HTML report next to the report. |
 | `-Open` | Open the HTML report when the scan finishes. |
 | `-Exclude <patterns>` | Leave out folders matching these names or wildcards, e.g. `-Exclude 'Contoso.*','*Teams*'`. |
-| `-ExcludeFile <path>` | Use a different exclude file. Defaults to `WinPkgScan.exclude.txt` next to the script. |
+| `-ExcludeFile <path>` | Use only this exclude file. By default both `WinPkgScan.exclude.txt` next to the script and your list in `%LOCALAPPDATA%\WinPkgScan\exclude.txt` are used. |
 | `-AdminChecks <Auto\|On\|Off>` | Administrator checks. `Auto` (default) runs them when elevated. |
 | `-NoHistory` | Do not read or update the scan history. |
+| `-ProgressLines` | Print `PROGRESS n/total name` for each folder. Used by the app. |
 
 `Run-Scan.bat` adds `-Csv` and `-Html` itself, and `-Open` when double-clicked.
 
@@ -183,7 +233,7 @@ Notes         : Provisioned (Windows may reinstall it)
 
 ## Excluding folders
 
-To keep a folder out of the results for good, add its name to `WinPkgScan.exclude.txt` next to the scripts (menu option 7 opens it):
+To keep a folder out of the results for good, add its name to the exclude list in the app's **Settings**, or to `WinPkgScan.exclude.txt` next to the scripts (menu option 7 opens it). Both lists are used:
 
 ```text
 # Lines starting with # are ignored
@@ -192,7 +242,7 @@ Contoso.*
 *Teams*
 ```
 
-`*` matches anything and `?` matches one character. Matching ignores upper and lower case. The remover reads the same file, so excluded folders are never deleted, even if marked. For a one-off run, use `-Exclude` instead.
+`*` matches anything and `?` matches one character. Matching ignores upper and lower case. The remover reads the same lists, so excluded folders are never deleted, even if marked. For a one-off run, use `-Exclude` instead.
 
 ## Removing folders
 
@@ -232,11 +282,11 @@ If the list of installed packages cannot be read, nothing is removed.
 | `-IncludeOtherFolders` | Also allow folders that are not package-named. |
 | `-IncludeWindowsComponents` | Also allow Windows component folders. Not recommended. |
 | `-Exclude <patterns>` | Never delete folders matching these names or wildcards. |
-| `-ExcludeFile <path>` | Use a different exclude file. Defaults to `WinPkgScan.exclude.txt` next to the script. |
+| `-ExcludeFile <path>` | Use only this exclude file, instead of both exclude lists. |
 | `-AdminChecks <Auto\|On\|Off>` | Administrator checks. `Auto` (default) runs them when elevated. |
 | `-LogPath <path>` | Where to save the log. Defaults to `WinPkgScan-DeleteLog-<date-time>.csv` next to the input CSV. |
 | `-NoHistory` | Do not add this run to the scan history. |
-| `-NoPause` | Skip the "Press Enter to exit" prompt. |
+| `-NoPause` | Never wait for Enter at the end. |
 
 ### Remover output
 
@@ -283,18 +333,20 @@ Run lint and tests:
 ./build.ps1                                # lint + tests
 ./build.ps1 -Task Lint                     # PSScriptAnalyzer only
 ./build.ps1 -Task Test                     # Pester only
-./build.ps1 -Task Package -Tag v1.7.0      # build the release zip into out/
+./build.ps1 -Task Package -Tag v1.8.0      # build the release zip and the module into out/
 ```
 
 - **Unit tests** mock `Get-AppxPackage` and use a fake Packages folder, so they run on any OS. Deletion is tested for real on the fake folders.
 - **Integration tests** (tag `Integration`) run only on Windows. They scan the real user packages, recycle and restore a folder through the real Recycle Bin, run the batch files, and build the app's window (`WinPkgScan-App.ps1 -SelfTest`).
-- **App tests** load the app with `-TestMode`, which defines its functions without a window, so its logic is tested on any system.
+- **App tests** load the app with `-TestMode`, which defines its functions without a window, so its logic is tested on any system. On Windows, `-SelfTest` also builds the settings window, both themes, the history chart and the progress bar.
+- **Installer tests** install, update and uninstall in a test folder on any system. On Windows they also check real shortcuts and a Settings > Apps entry, in test locations.
+- **Module tests** build the PowerShell Gallery module the same way the release does, import it and run its commands.
 - **CI** (`.github/workflows/ci.yml`) runs on every branch push and pull request: lint on Ubuntu, tests on Windows with PowerShell 5.1 and 7. Test results are uploaded as a build artifact.
 - **Dependabot** (`.github/dependabot.yml`) opens a pull request when a GitHub Action used by the workflows has a new version.
 
 ### Releasing
 
-1. Update the version in all four scripts: the `Version:` help line and `$ScriptVersion` (`$AppVersion` in the app).
+1. Update the version in the four scripts and `Install.ps1` (the `Version:` help line and `$ScriptVersion`, or `$AppVersion` in the app), and `ModuleVersion` in `module/WinPkgScan.psd1`.
 2. Add a `## [X.Y.Z] - YYYY-MM-DD` section at the top of `CHANGELOG.md`.
 3. Merge to `main` through a pull request, with CI green.
 4. Tag and push:
@@ -306,7 +358,15 @@ Run lint and tests:
    git push origin vX.Y.Z
    ```
 
-The **Release** workflow (`.github/workflows/release.yml`) then runs the full CI. If CI passes, it builds the zip (the four scripts, the five batch files, the exclude file, README and LICENSE) and a SHA256 checksum, and publishes a GitHub Release. The release notes come from the CHANGELOG. The release fails if the tag does not match the script version or the CHANGELOG has no section for it.
+The **Release** workflow (`.github/workflows/release.yml`) then runs the full CI. If CI passes, it builds the zip (the scripts, the installer, the batch files, the exclude file, the icon, README and LICENSE) and a SHA256 checksum, and publishes a GitHub Release. The release notes come from the CHANGELOG. Then it publishes the module to the PowerShell Gallery. The release fails if the tag does not match the script version or the CHANGELOG has no section for it.
+
+#### PowerShell Gallery setup (once)
+
+1. Sign in at [powershellgallery.com](https://www.powershellgallery.com) with a Microsoft account.
+2. Your name > **API Keys** > **Create**: name `WinPkgScan GitHub`, scope **Push new packages and package versions**, glob pattern `WinPkgScan`. Copy the key.
+3. On GitHub: **Settings > Secrets and variables > Actions > New repository secret**, name `PSGALLERY_API_KEY`, paste the key.
+
+Without the secret, the Gallery step is skipped with a notice and the GitHub Release still works. A version already on the Gallery is skipped, so re-running a release is safe. The key expires (365 days at most): create a new one and update the secret.
 
 Do not create the release by hand on GitHub: the workflow makes it. If one was made by hand anyway, or a release run failed, go to **Actions > Release > Run workflow**, enter the tag (e.g. `v1.7.0`), and run it. It attaches the zip and checksum to the existing release and replaces its title and notes.
 

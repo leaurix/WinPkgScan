@@ -11,5 +11,9 @@
 # Docs
 *.md   text eol=lf
 
+# Images
+*.ico  binary
+*.png  binary
+
 # Exclude list: keep CRLF so Notepad on any Windows version shows it correctly
 WinPkgScan.exclude.txt text eol=crlf

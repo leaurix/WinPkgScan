@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
 rem WinPkgScan-App.bat
-rem Opens the WinPkgScan app (preview): scan, tick folders,
+rem Opens the WinPkgScan app: scan, tick folders,
 rem preview, move to the Recycle Bin and restore, in one window.
 rem ============================================================
 setlocal
