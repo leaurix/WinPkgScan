@@ -71,7 +71,7 @@ echo   5  Delete marked folders - Recycle Bin, asks before each one
 echo   6  Restore folders from the last delete
 echo   7  Edit exclusions
 echo   8  Help - README
-echo   9  Open the WinPkgScan app - preview
+echo   9  Open the WinPkgScan app
 echo   0  Exit
 echo.
 echo   To mark folders: tick them in the HTML report and click Save marked CSV.

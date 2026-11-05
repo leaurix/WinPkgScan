@@ -26,6 +26,7 @@ jobs:
     name: Publish GitHub release
     needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -33,7 +34,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Build release zip
+      - name: Build release zip and module
         shell: pwsh
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
@@ -56,3 +57,24 @@ jobs:
               --notes-file out/release-notes.md \
               --verify-tag --latest
           fi
+
+      # Publishes the module to the PowerShell Gallery. Needs the repository
+      # secret PSGALLERY_API_KEY: without it this step is skipped. A version
+      # that is already on the Gallery is skipped too, so re-runs are safe.
+      - name: Publish to the PowerShell Gallery
+        shell: pwsh
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+        run: |
+          if (-not $env:PSGALLERY_API_KEY) {
+            Write-Host '::notice title=PowerShell Gallery::Skipped: add the PSGALLERY_API_KEY repository secret to publish the module.'
+            exit 0
+          }
+          $module  = Join-Path $PWD 'out/module/WinPkgScan'
+          $version = (Import-PowerShellDataFile (Join-Path $module 'WinPkgScan.psd1')).ModuleVersion
+          if (Find-PSResource -Name WinPkgScan -Version $version -Repository PSGallery -ErrorAction SilentlyContinue) {
+            Write-Host "::notice title=PowerShell Gallery::WinPkgScan $version is already published."
+            exit 0
+          }
+          Publish-PSResource -Path $module -Repository PSGallery -ApiKey $env:PSGALLERY_API_KEY -ErrorAction Stop
+          Write-Host "Published WinPkgScan $($version): https://www.powershellgallery.com/packages/WinPkgScan/$($version)"

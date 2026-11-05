@@ -376,6 +376,24 @@ Describe 'Scanning (mocked AppX packages)' {
             $rows.FolderName | Should -Contain 'Contoso.Old_abc123def4567'
         }
 
+        It 'also reads your own exclude list in %LOCALAPPDATA%\WinPkgScan when no -ExcludeFile is given' {
+            $userList = Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'exclude.txt'
+            New-Item -ItemType Directory -Path (Split-Path -Parent $userList) -Force | Out-Null
+            Set-Content -LiteralPath $userList -Value @('# from the app settings', 'Contoso.*')
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; ExcludeFile = '' } | Should -Be 0
+            $rows = @(Import-Csv -LiteralPath $CsvPath)
+            $rows.FolderName | Should -Not -Contain 'Contoso.Old_abc123def4567'
+            $rows.FolderName | Should -Contain 'Fabrikam.Gone_8wekyb3d8bbwe'
+        }
+
+        It 'uses only the given file with -ExcludeFile' {
+            $userList = Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'exclude.txt'
+            New-Item -ItemType Directory -Path (Split-Path -Parent $userList) -Force | Out-Null
+            Set-Content -LiteralPath $userList -Value 'Contoso.*'
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true } | Should -Be 0
+            @(Import-Csv -LiteralPath $CsvPath).FolderName | Should -Contain 'Contoso.Old_abc123def4567'
+        }
+
         It 'still runs when the given exclude file does not exist' {
             Invoke-Scan @{ ReportPath = $ReportPath; ExcludeFile = (Join-Path $OutDir 'missing.txt') } | Should -Be 0
         }
@@ -384,6 +402,33 @@ Describe 'Scanning (mocked AppX packages)' {
             $shipped = Join-Path $RepoRoot 'WinPkgScan.exclude.txt'
             $shipped | Should -Exist
             @(Get-Content -LiteralPath $shipped | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') }).Count | Should -Be 0
+        }
+    }
+
+    Context 'running from the app and from a prompt' {
+
+        It 'prints a PROGRESS line for every folder with -ProgressLines' {
+            $out = @(& $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -NoHistory -ProgressLines 6>&1 |
+                ForEach-Object { "$_" })
+            $LASTEXITCODE | Should -Be 0
+            $lines = @($out | Where-Object { $_ -match '^PROGRESS \d+/\d+ ' })
+            $lines.Count | Should -Be 7
+            $lines[0]  | Should -Match '^PROGRESS 1/7 \S'
+            $lines[-1] | Should -Match '^PROGRESS 7/7 \S'
+        }
+
+        It 'prints no PROGRESS lines without -ProgressLines' {
+            $out = @(& $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -NoHistory 6>&1 |
+                ForEach-Object { "$_" })
+            @($out | Where-Object { $_ -match '^PROGRESS ' }).Count | Should -Be 0
+        }
+
+        It 'does not wait for Enter when run from a PowerShell prompt, even without -NoPause' {
+            # From a prompt, the PowerShell command line does not name the script.
+            $out = @(& $ScriptPath -ReportPath $ReportPath -ExcludeFile $EmptyExclude -AdminChecks Off -NoHistory 6>&1 |
+                ForEach-Object { "$_" })
+            $LASTEXITCODE | Should -Be 0
+            ($out -join "`n") | Should -Not -Match 'Press Enter'
         }
     }
 

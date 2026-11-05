@@ -30,7 +30,9 @@
     space freed with WinPkgScan (restored folders are subtracted).
 
 .PARAMETER NoPause
-    Skip the "Press Enter to exit" prompt.
+    Never pause at the end. The script only pauses when it opened its own
+    window (a batch file or "Run with PowerShell"), not when run from an
+    open PowerShell prompt.
 
 .EXAMPLE
     .\Restore-OrphanedAppxFolders.ps1 -WhatIf
@@ -40,7 +42,7 @@
     .\Restore-OrphanedAppxFolders.ps1 -Name 'Contoso.*'
 
 .NOTES
-    Version: 1.7.0
+    Version: 1.8.0
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
@@ -57,8 +59,21 @@ param(
     [switch]$NoPause
 )
 
-$ScriptVersion = "1.7.0"
-$PauseAtEnd    = -not $NoPause.IsPresent
+$ScriptVersion = "1.8.0"
+# Pause at the end only when this script opened its own console window
+# (a batch file or "Run with PowerShell"), so you can read the result before
+# it closes. Never from an open PowerShell prompt, the module, the app, or
+# with redirected input.
+$PauseAtEnd = $false
+if (-not $NoPause.IsPresent) {
+    try {
+        $PauseAtEnd = (-not [Console]::IsInputRedirected) -and
+            ([Environment]::CommandLine.IndexOf([System.IO.Path]::GetFileName($PSCommandPath), [StringComparison]::OrdinalIgnoreCase) -ge 0)
+    }
+    catch {
+        $PauseAtEnd = $false
+    }
+}
 
 function Exit-Script {
     param([int]$Code = 0)

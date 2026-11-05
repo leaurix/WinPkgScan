@@ -47,7 +47,10 @@ $ReleaseFiles = @(
     'Run-Scan.bat'
     'Run-Scan-Unattended.bat'
     'Run-Delete.bat'
+    'Install.ps1'
+    'Install.bat'
     'WinPkgScan.exclude.txt'
+    'WinPkgScan.ico'
     'README.md'
     'LICENSE'
 )
@@ -63,7 +66,15 @@ $CrlfFiles = @(
     'Run-Scan.bat'
     'Run-Scan-Unattended.bat'
     'Run-Delete.bat'
+    'Install.ps1'
+    'Install.bat'
+    'module/WinPkgScan.psd1'
+    'module/WinPkgScan.psm1'
 )
+
+# The PowerShell Gallery module is built from these two files plus the
+# FileList in the manifest, copied from the repo root.
+$ModuleSource = Join-Path $Root 'module'
 
 function Invoke-Lint {
     Write-Host ""
@@ -75,6 +86,9 @@ function Invoke-Lint {
         Join-Path $Root 'Remove-OrphanedAppxFolders.ps1'
         Join-Path $Root 'Restore-OrphanedAppxFolders.ps1'
         Join-Path $Root 'WinPkgScan-App.ps1'
+        Join-Path $Root 'Install.ps1'
+        Join-Path $ModuleSource 'WinPkgScan.psm1'
+        Join-Path $ModuleSource 'WinPkgScan.psd1'
         Join-Path $Root 'build.ps1'
     )
     $settings = Join-Path $Root 'PSScriptAnalyzerSettings.psd1'
@@ -179,6 +193,27 @@ function Test-CrlfLineEnding {
     return $true
 }
 
+function Build-ModuleFolder {
+    # Assembles the module in out/module/WinPkgScan and checks its manifest.
+    param([string]$Version)
+    $manifest = Import-PowerShellDataFile -LiteralPath (Join-Path $ModuleSource 'WinPkgScan.psd1')
+    if ($manifest.ModuleVersion -ne $Version) {
+        throw "module/WinPkgScan.psd1 has ModuleVersion $($manifest.ModuleVersion), not $Version."
+    }
+    $target = Join-Path (Join-Path $OutDir 'module') 'WinPkgScan'
+    if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+    New-Item -ItemType Directory -Path $target -Force | Out-Null
+    foreach ($name in $manifest.FileList) {
+        $from = Join-Path $ModuleSource $name
+        if (-not (Test-Path -LiteralPath $from)) { $from = Join-Path $Root $name }
+        if (-not (Test-Path -LiteralPath $from)) { throw "Missing module file: $name" }
+        Copy-Item -LiteralPath $from -Destination (Join-Path $target $name)
+    }
+    $checked = Test-ModuleManifest -Path (Join-Path $target 'WinPkgScan.psd1') -ErrorAction Stop
+    if ("$($checked.Version)" -ne $Version) { throw "The module manifest reports version $($checked.Version)." }
+    return $target
+}
+
 function Invoke-Package {
     param([string]$ReleaseTag)
 
@@ -234,6 +269,8 @@ function Invoke-Package {
         return $false
     }
 
+    $module = Build-ModuleFolder -Version $version
+
     $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
     [System.IO.File]::WriteAllText($hashPath, "$hash  $zipName`n")
 
@@ -241,7 +278,12 @@ function Invoke-Package {
         $notes
         ''
         '### Download'
-        "Download ``$zipName``, extract it, and double-click ``Run-Scan.bat``. See the README for options."
+        "Download ``$zipName``, right-click it > Properties > Unblock, and extract it."
+        ''
+        '- Double-click `Install.bat` to install the app with Start menu and desktop shortcuts, or'
+        '- double-click `WinPkgScan-App.bat` to use it without installing.'
+        ''
+        'Or from PowerShell: `Install-Module WinPkgScan -Scope CurrentUser`'
         ''
         "SHA256: ``$hash``"
     ) -join "`n"
@@ -251,11 +293,13 @@ function Invoke-Package {
     if ($env:GITHUB_OUTPUT) {
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "version=$version"
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "zip=out/$zipName"
+        Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "module=out/module/WinPkgScan"
     }
 
     Write-Host "Created: out/$zipName"
     Write-Host "Created: out/$zipName.sha256"
     Write-Host "Created: out/release-notes.md"
+    Write-Host "Created: $($module.Substring($Root.Length + 1))"
     Write-Host "Package passed." -ForegroundColor Green
     return $true
 }

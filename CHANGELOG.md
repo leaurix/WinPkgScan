@@ -3,6 +3,32 @@
 All notable changes to this project are listed here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-11-03
+
+### Added
+- **Install.bat:** installs WinPkgScan for you in `%LOCALAPPDATA%\Programs\WinPkgScan`, with a **WinPkgScan** shortcut in the Start menu and on the desktop, and an entry in **Settings > Apps** to uninstall it. No administrator rights needed. Run it again from a newer download to update; your exclude list is kept.
+  - `Install.bat -Uninstall` (or Settings > Apps) removes only the WinPkgScan files and keeps your history and settings. `-RemoveData` removes those too.
+  - Options: `-NoDesktopShortcut`, `-NoShortcuts`, `-InstallPath`, `-WhatIf`.
+- **PowerShell Gallery module:** `Install-Module WinPkgScan -Scope CurrentUser`, then `Find-OrphanedAppxFolders`, `Remove-OrphanedAppxFolders`, `Restore-OrphanedAppxFolders`, `Install-WinPkgScan` and `Start-WinPkgScanApp` work from any PowerShell prompt, with the same options and help as the scripts. Each tagged release publishes it automatically once the `PSGALLERY_API_KEY` secret is set.
+- **App: Settings:**
+  - your exclude list, edited in the app and saved in `%LOCALAPPDATA%\WinPkgScan\exclude.txt`;
+  - the "skip folders changed in the last 30 days" rule;
+  - administrator checks (Auto, On or Off);
+  - theme: System, Light or Dark.
+- **App: dark mode.** Follows the Windows app mode by default, title bar included.
+- **App: History tab** with every scan, removal and restore, the totals, and a chart of the space freed over time.
+- **App: live progress.** The progress bar and status show how many folders have been scanned.
+- App icon (`WinPkgScan.ico`) for the window, the shortcuts and Settings > Apps.
+- `-ProgressLines` on the scanner, used by the app for its progress bar.
+- Tests for the installer (on any system, plus real shortcuts and the Settings entry on Windows), the module, the app settings, themes, progress and history, and the new script behaviour.
+
+### Changed
+- **The app is no longer a preview.**
+- **No more "Press Enter to exit" from a PowerShell prompt.** The scripts only wait at the end when they opened their own window (a batch file or "Run with PowerShell"). `-NoPause` still turns it off completely.
+- The scanner and remover also read your own exclude list in `%LOCALAPPDATA%\WinPkgScan\exclude.txt`, as well as `WinPkgScan.exclude.txt` next to the scripts. `-ExcludeFile` still uses only the file given.
+- The release zip includes `Install.bat`, `Install.ps1` and `WinPkgScan.ico`.
+- CI jobs have time limits, so a stuck run fails instead of running for hours.
+
 ## [1.7.0] - 2026-10-14
 
 ### Added

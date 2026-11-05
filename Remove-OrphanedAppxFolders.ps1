@@ -58,7 +58,8 @@
 
 .PARAMETER ExcludeFile
     A text file with one exclude pattern per line (# starts a comment).
-    Defaults to WinPkgScan.exclude.txt next to this script.
+    If not given, two files are read: WinPkgScan.exclude.txt next to this
+    script, and your own %LOCALAPPDATA%\WinPkgScan\exclude.txt.
 
 .PARAMETER LogPath
     Where to save the log CSV. Defaults to a timestamped file next to the
@@ -73,7 +74,9 @@
     space freed with WinPkgScan.
 
 .PARAMETER NoPause
-    Skip the "Press Enter to exit" prompt. For scheduled/unattended runs.
+    Never pause at the end. The script only pauses when it opened its own
+    window (a batch file or "Run with PowerShell"), not when run from an
+    open PowerShell prompt.
 
 .EXAMPLE
     .\Remove-OrphanedAppxFolders.ps1 -WhatIf
@@ -88,7 +91,7 @@
     Unattended run: no prompts.
 
 .NOTES
-    Version: 1.7.0
+    Version: 1.8.0
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -123,8 +126,21 @@ param(
     [switch]$NoPause
 )
 
-$ScriptVersion = "1.7.0"
-$PauseAtEnd    = -not $NoPause.IsPresent
+$ScriptVersion = "1.8.0"
+# Pause at the end only when this script opened its own console window
+# (a batch file or "Run with PowerShell"), so you can read the result before
+# it closes. Never from an open PowerShell prompt, the module, the app, or
+# with redirected input.
+$PauseAtEnd = $false
+if (-not $NoPause.IsPresent) {
+    try {
+        $PauseAtEnd = (-not [Console]::IsInputRedirected) -and
+            ([Environment]::CommandLine.IndexOf([System.IO.Path]::GetFileName($PSCommandPath), [StringComparison]::OrdinalIgnoreCase) -ge 0)
+    }
+    catch {
+        $PauseAtEnd = $false
+    }
+}
 
 # -Force skips the per-folder prompt, unless -Confirm was given explicitly.
 if ($Force.IsPresent -and -not $PSBoundParameters.ContainsKey('Confirm')) {
@@ -166,20 +182,22 @@ function Test-MarkedForDelete {
 }
 
 function Get-ExcludePattern {
-    # Patterns from -Exclude plus the exclude file (one per line, # = comment).
-    param([string[]]$FromParameter, [string]$File, [bool]$FileWasGiven)
+    # Patterns from -Exclude plus the exclude files (one per line, # = comment).
+    param([string[]]$FromParameter, [string[]]$Files, [bool]$FileWasGiven)
     $patterns = New-Object System.Collections.Generic.List[string]
     foreach ($p in @($FromParameter)) {
         if (-not [string]::IsNullOrWhiteSpace($p)) { $patterns.Add($p.Trim()) }
     }
-    if (Test-Path -LiteralPath $File -PathType Leaf) {
-        foreach ($line in (Get-Content -LiteralPath $File)) {
-            $t = $line.Trim()
-            if ($t -and -not $t.StartsWith('#')) { $patterns.Add($t) }
+    foreach ($file in @($Files)) {
+        if ($file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
+            foreach ($line in (Get-Content -LiteralPath $file)) {
+                $t = $line.Trim()
+                if ($t -and -not $t.StartsWith('#')) { $patterns.Add($t) }
+            }
         }
-    }
-    elseif ($FileWasGiven) {
-        Write-Host "WARNING: Exclude file not found: $File" -ForegroundColor Yellow
+        elseif ($FileWasGiven) {
+            Write-Host "WARNING: Exclude file not found: $file" -ForegroundColor Yellow
+        }
     }
     return , $patterns.ToArray()
 }
@@ -407,14 +425,20 @@ function Get-FreedMB {
 
 $PackagesPath = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "Packages"))
 
+# Exclude lists: the one next to the scripts, and your own one (the app's
+# Settings edit it). -ExcludeFile uses only the file given.
 if ([string]::IsNullOrWhiteSpace($ExcludeFile)) {
-    $ExcludeFile = Join-Path $PSScriptRoot "WinPkgScan.exclude.txt"
+    $ExcludeFiles = @(
+        (Join-Path $PSScriptRoot "WinPkgScan.exclude.txt")
+        (Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'exclude.txt')
+    )
     $ExcludeFileGiven = $false
 }
 else {
+    $ExcludeFiles = @($ExcludeFile)
     $ExcludeFileGiven = $true
 }
-$ExcludePatterns = Get-ExcludePattern -FromParameter $Exclude -File $ExcludeFile -FileWasGiven $ExcludeFileGiven
+$ExcludePatterns = Get-ExcludePattern -FromParameter $Exclude -Files $ExcludeFiles -FileWasGiven $ExcludeFileGiven
 
 # Package folders end in "_" + a 13-character publisher ID.
 $PackageNamePattern = '^.+_[0-9a-hjkmnp-tv-z]{13}$'

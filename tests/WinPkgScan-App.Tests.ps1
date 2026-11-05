@@ -1,11 +1,12 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0' }
 <#
-    Pester tests for WinPkgScan-App.ps1 (the app, preview)
+    Pester tests for WinPkgScan-App.ps1 (the app)
 
     - Unit tests: run anywhere. The app is loaded with -TestMode, which
       defines its functions without opening a window.
     - Integration test (tag "Integration"): Windows only. Runs -SelfTest,
-      which builds the real window without showing it.
+      which builds the real windows without showing them, and checks the
+      settings window, both themes, the history chart and the progress bar.
 
     Run:  Invoke-Pester ./tests
 #>
@@ -90,6 +91,57 @@ Describe 'App script file' {
 
         It 'has no duplicate names' {
             @($XamlNames | Group-Object | Where-Object Count -gt 1).Count | Should -Be 0
+        }
+    }
+
+    Context 'settings window and shared styles (XAML)' {
+
+        BeforeAll {
+            $text = Get-Content -LiteralPath $AppPath -Raw
+            function Get-HereString([string]$Name) {
+                $s = $text.IndexOf("`$$Name = @'")
+                $s = $text.IndexOf("`n", $s) + 1
+                $e = $text.IndexOf("'@", $s)
+                return $text.Substring($s, $e - $s)
+            }
+            $script:Shared   = Get-HereString 'SharedResources'
+            $script:Settings = Get-HereString 'SettingsXaml'
+            $script:MainXaml = Get-HereString 'Xaml'
+            $ns = New-Object System.Xml.XmlNamespaceManager((New-Object System.Xml.NameTable))
+            $ns.AddNamespace('x', 'http://schemas.microsoft.com/winfx/2006/xaml')
+            $script:SettingsDoc = [xml]$Settings.Replace('<!--SHARED-->', $Shared)
+            $script:MainDoc     = [xml]$MainXaml.Replace('<!--SHARED-->', $Shared)
+            $nsm = New-Object System.Xml.XmlNamespaceManager($SettingsDoc.NameTable)
+            $nsm.AddNamespace('x', 'http://schemas.microsoft.com/winfx/2006/xaml')
+            $script:SettingsNames = @($SettingsDoc.SelectNodes('//@x:Name', $nsm) | ForEach-Object { $_.Value })
+            $listText = [regex]::Match($text, '(?s)\$SettingsControlNames = @\((.*?)\)').Groups[1].Value
+            $script:SettingsListed = @([regex]::Matches($listText, "'(\w+)'") | ForEach-Object { $_.Groups[1].Value })
+            $script:AllXaml = $Shared + $Settings + $MainXaml
+        }
+
+        It 'loads both windows with the shared styles as well-formed XML' {
+            $MainDoc.DocumentElement.LocalName | Should -Be 'Window'
+            $SettingsDoc.DocumentElement.LocalName | Should -Be 'Window'
+        }
+
+        It 'names every settings control the code looks up' {
+            $SettingsListed.Count | Should -Be 7
+            foreach ($name in $SettingsListed) { $SettingsNames | Should -Contain $name }
+        }
+
+        It 'defines a brush for every colour the theme sets, and the theme sets every brush used' {
+            $defined = @([regex]::Matches($Shared, '<SolidColorBrush x:Key="(\w+)"') | ForEach-Object { $_.Groups[1].Value })
+            $used    = @([regex]::Matches($AllXaml, '\{DynamicResource (\w+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+            $palette = @((Get-ThemePalette -Name 'Light').Keys)
+            ($defined | Sort-Object) -join ',' | Should -Be (($palette | Sort-Object) -join ',')
+            foreach ($key in $used) { $palette | Should -Contain $key }
+        }
+
+        It 'has light colours that match the theme defaults in the XAML' {
+            $light = Get-ThemePalette -Name 'Light'
+            foreach ($m in [regex]::Matches($Shared, '<SolidColorBrush x:Key="(\w+)" Color="(#[0-9A-Fa-f]{6})"/>')) {
+                $light[$m.Groups[1].Value] | Should -Be $m.Groups[2].Value
+            }
         }
     }
 }
@@ -243,6 +295,208 @@ Describe 'App logic' {
             $s.FreedMB  | Should -Be 12
             $s.Scans    | Should -Be 2
             $s.LastScan | Should -Be '2026-10-14 11:00'
+        }
+    }
+
+    Context 'settings' {
+
+        BeforeEach {
+            $script:SettingsPath = Join-Path $TestDrive ("settings-{0}.json" -f [guid]::NewGuid().ToString('N'))
+        }
+
+        It 'uses the defaults when there is no settings file' {
+            $s = Read-AppSetting -Path $SettingsPath
+            $s.MinAgeDays  | Should -Be 30
+            $s.AdminChecks | Should -Be 'Auto'
+            $s.Theme       | Should -Be 'System'
+        }
+
+        It 'saves and reads back the settings' {
+            Save-AppSetting -Path $SettingsPath -Setting ([pscustomobject]@{ MinAgeDays = 7; AdminChecks = 'On'; Theme = 'Dark' })
+            $s = Read-AppSetting -Path $SettingsPath
+            $s.MinAgeDays  | Should -Be 7
+            $s.AdminChecks | Should -Be 'On'
+            $s.Theme       | Should -Be 'Dark'
+        }
+
+        It 'falls back to the default for each value that is not valid' {
+            '{"MinAgeDays":-5,"AdminChecks":"Maybe","Theme":"Dark"}' | Set-Content -LiteralPath $SettingsPath
+            $s = Read-AppSetting -Path $SettingsPath
+            $s.MinAgeDays  | Should -Be 30
+            $s.AdminChecks | Should -Be 'Auto'
+            $s.Theme       | Should -Be 'Dark'
+        }
+
+        It 'uses the defaults when the settings file is damaged' {
+            '{ not json' | Set-Content -LiteralPath $SettingsPath
+            (Read-AppSetting -Path $SettingsPath).MinAgeDays | Should -Be 30
+        }
+
+        It 'accepts only whole days from 0 to 36500' {
+            foreach ($ok in '0', '30', ' 7 ', '36500') { Test-MinAgeDay -Text $ok | Should -BeTrue -Because "'$ok'" }
+            foreach ($bad in '', '-1', 'abc', '1.5', '36501') { Test-MinAgeDay -Text $bad | Should -BeFalse -Because "'$bad'" }
+        }
+
+        It 'explains the recent-change rule under the marked total' {
+            Get-RuleText -Days 30 | Should -Match 'last 30 days are skipped'
+            Get-RuleText -Days 1  | Should -Match 'last 1 day are skipped'
+            Get-RuleText -Days 0  | Should -Not -Match 'skipped'
+        }
+
+        It 'keeps the settings and exclude list in %LOCALAPPDATA%\WinPkgScan, where the scripts read the list' {
+            $env:LOCALAPPDATA = Join-Path $TestDrive 'L'
+            $p = Get-AppPath -ScriptFolder $RepoRoot
+            $p.Settings | Should -Be (Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'settings.json')
+            $p.Exclude  | Should -Be (Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'exclude.txt')
+            $p.Icon     | Should -Be (Join-Path $RepoRoot 'WinPkgScan.ico')
+            $p.Icon     | Should -Exist
+            $env:LOCALAPPDATA = $script:SavedLocalAppData
+        }
+    }
+
+    Context 'theme' {
+
+        It 'follows the setting, or Windows for System' {
+            Resolve-ThemeName -Setting 'Light' -SystemUsesLight $false | Should -Be 'Light'
+            Resolve-ThemeName -Setting 'Dark'  -SystemUsesLight $true  | Should -Be 'Dark'
+            Resolve-ThemeName -Setting 'System' -SystemUsesLight $false | Should -Be 'Dark'
+            Resolve-ThemeName -Setting 'System' -SystemUsesLight $true  | Should -Be 'Light'
+            Resolve-ThemeName -Setting 'System' -SystemUsesLight $null  | Should -Be 'Light'
+        }
+
+        It 'has the same colours named in both themes, all valid' {
+            $light = Get-ThemePalette -Name 'Light'
+            $dark  = Get-ThemePalette -Name 'Dark'
+            (@($light.Keys) -join ',') | Should -Be (@($dark.Keys) -join ',')
+            foreach ($v in @($light.Values) + @($dark.Values)) { $v | Should -Match '^#[0-9A-F]{6}$' }
+            $dark.BgBrush | Should -Not -Be $light.BgBrush
+        }
+    }
+
+    Context 'scan progress' {
+
+        It 'reads a progress line' {
+            $p = Get-ProgressInfo -Line 'PROGRESS 5/20 Contoso.App_abc123def4567'
+            $p.Done | Should -Be 5
+            $p.Total | Should -Be 20
+            $p.Percent | Should -Be 25
+            $p.Name | Should -Be 'Contoso.App_abc123def4567'
+        }
+
+        It 'ignores other lines, and never goes over 100 percent' {
+            Get-ProgressInfo -Line 'Orphaned package folders: 3' | Should -BeNullOrEmpty
+            Get-ProgressInfo -Line '' | Should -BeNullOrEmpty
+            (Get-ProgressInfo -Line 'PROGRESS 9/4 x').Percent | Should -Be 100
+            (Get-ProgressInfo -Line 'PROGRESS 0/0').Percent | Should -Be 0
+        }
+
+        It 'reads the last line of output that a script is still writing' {
+            $file = Join-Path $TestDrive 'output.txt'
+            $writer = New-Object System.IO.FileStream($file, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+            try {
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes("Scanning`r`nPROGRESS 1/3 A`r`nPROGRESS 2/3 B`r`n")
+                $writer.Write($bytes, 0, $bytes.Length); $writer.Flush()
+                Get-OutputLastLine -Path $file | Should -Be 'PROGRESS 2/3 B'
+            }
+            finally {
+                $writer.Dispose()
+            }
+            Get-OutputLastLine -Path (Join-Path $TestDrive 'none.txt') | Should -Be ''
+        }
+    }
+
+    Context 'arguments passed to the scripts' {
+
+        BeforeAll {
+            $script:P = [pscustomobject]@{ Report = 'C:\A B\r.txt'; Marked = 'C:\A B\m.csv' }
+            $script:S = [pscustomobject]@{ MinAgeDays = 14; AdminChecks = 'On'; Theme = 'Dark' }
+        }
+
+        It 'scans with progress lines and the administrator checks setting' {
+            $a = @(Get-ScanArgument -Paths $P -Setting $S)
+            $a | Should -Contain '-ProgressLines'
+            $a | Should -Contain '-NoPause'
+            $a[[array]::IndexOf($a, '-AdminChecks') + 1] | Should -Be 'On'
+            $a[[array]::IndexOf($a, '-ReportPath') + 1] | Should -Be 'C:\A B\r.txt'
+        }
+
+        It 'previews with -WhatIf and removes with -Force, with the days setting' {
+            $preview = @(Get-RemoveArgument -Paths $P -Setting $S -LogPath 'l.csv' -Preview)
+            $preview | Should -Contain '-WhatIf'
+            $preview | Should -Not -Contain '-Force'
+            $remove = @(Get-RemoveArgument -Paths $P -Setting $S -LogPath 'l.csv')
+            $remove | Should -Contain '-Force'
+            $remove | Should -Not -Contain '-WhatIf'
+            $remove[[array]::IndexOf($remove, '-MinAgeDays') + 1] | Should -Be '14'
+        }
+
+        It 'only passes options the scripts have' {
+            $scanParams   = (Get-Command (Join-Path $RepoRoot 'Find-OrphanedAppxFolders.ps1')).Parameters.Keys
+            $removeParams = (Get-Command $RemovePath).Parameters.Keys
+            foreach ($a in @(Get-ScanArgument -Paths $P -Setting $S) | Where-Object { $_ -like '-*' }) { $scanParams | Should -Contain $a.TrimStart('-') }
+            foreach ($a in @(Get-RemoveArgument -Paths $P -Setting $S -LogPath 'l') | Where-Object { $_ -like '-*' }) { $removeParams | Should -Contain $a.TrimStart('-') }
+        }
+    }
+
+    Context 'exclude list' {
+
+        It 'starts with a list that only has comments' {
+            $text = Read-ExcludeText -Path (Join-Path $TestDrive 'no-list.txt')
+            $text | Should -Match 'Contoso'
+            Get-ExcludeCount -Text $text | Should -Be 0
+        }
+
+        It 'saves the list with Windows line endings, and counts the patterns' {
+            $file = Join-Path (Join-Path $TestDrive 'data') 'exclude.txt'
+            Save-ExcludeText -Path $file -Text "# mine`nContoso.*`n`nFabrikam.Tool_*"
+            $raw = [System.IO.File]::ReadAllText($file)
+            $raw | Should -Match "Contoso\.\*`r`n`r`nFabrikam"
+            $raw.EndsWith("`r`n") | Should -BeTrue
+            Get-ExcludeCount -Text (Read-ExcludeText -Path $file) | Should -Be 2
+        }
+    }
+
+    Context 'history tab' {
+
+        BeforeAll {
+            $script:H = [pscustomobject]@{
+                Scans    = @([pscustomobject]@{ Time = '2026-10-01 10:00'; Orphans = 3; OrphanMB = 120 })
+                Removals = @([pscustomobject]@{ Time = '2026-10-01 10:05'; Folders = 2; FreedMB = 100; Mode = 'Recycled' },
+                             [pscustomobject]@{ Time = '2026-10-09 09:00'; Folders = 1; FreedMB = 50; Mode = 'Deleted' })
+                Restores = @([pscustomobject]@{ Time = '2026-10-02 08:00'; Folders = 1; SizeMB = 120 })
+            }
+        }
+
+        It 'lists scans, removals and restores, newest first' {
+            $rows = @(Get-HistoryActivity -History $H)
+            $rows.Count | Should -Be 4
+            $rows[0].Event | Should -Be 'Deleted permanently'
+            $rows[-1].Event | Should -Be 'Scan'
+            ($rows | Where-Object Event -eq 'Restored').Folders | Should -Be 1
+        }
+
+        It 'totals the space freed over time, never below zero' {
+            $series = @(Get-FreedSeries -History $H)
+            $series.TotalMB | Should -Be @(100, 0, 50)
+        }
+
+        It 'has nothing to chart or list for an empty history' {
+            $empty = [pscustomobject]@{ Scans = @(); Removals = @(); Restores = @() }
+            @(Get-FreedSeries -History $empty).Count | Should -Be 0
+            @(Get-HistoryActivity -History $empty).Count | Should -Be 0
+            @(Get-ChartPoint -Series @() -Width 100 -Height 50).Count | Should -Be 0
+        }
+
+        It 'scales the chart into its box' {
+            $pts = @(Get-ChartPoint -Width 200 -Height 100 -Series @(
+                [pscustomobject]@{ TotalMB = 0 }, [pscustomobject]@{ TotalMB = 50 }, [pscustomobject]@{ TotalMB = 100 }))
+            $pts.X | Should -Be @(0, 100, 200)
+            $pts.Y | Should -Be @(100, 50, 0)
+        }
+
+        It 'shows sizes in MB or GB' {
+            Format-Size 950 | Should -Be '950 MB'
+            Format-Size 1536 | Should -Match '^1[.,]5 GB$'
         }
     }
 

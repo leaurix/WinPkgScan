@@ -342,6 +342,16 @@ Describe 'Removing (mocked AppX packages)' {
             $DirB | Should -Exist
         }
 
+        It 'skips a folder in your own exclude list when no -ExcludeFile is given' {
+            $userList = Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'exclude.txt'
+            New-Item -ItemType Directory -Path (Split-Path -Parent $userList) -Force | Out-Null
+            Set-Content -LiteralPath $userList -Value 'Fabrikam.*'
+            New-TestCsv -Marked $OrphanA, $OrphanB
+            Invoke-Remove @{ Permanent = $true; ExcludeFile = '' } | Out-Null
+            $DirA | Should -Not -Exist
+            $DirB | Should -Exist
+        }
+
         It 'skips a folder modified within -MinAgeDays' {
             $recent = New-PackageFolder -Name 'Recent.App_abc123def4567' -Modified (Get-Date).AddDays(-5)
             New-TestCsv -Rows @(@{ Name = 'Recent.App_abc123def4567'; Delete = 'Yes' })
