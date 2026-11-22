@@ -1167,7 +1167,8 @@ if ($History) {
 
 # Scheduled scans: tell the user about new orphaned folders.
 if ($Notify) {
-    $NotifyItems = if ($PrevScan) { @($Orphans | Where-Object { $_.New -eq 'Yes' }) } else { @($Orphans) }
+    # Wrapped in @() so one folder still counts as 1 in Windows PowerShell 5.1.
+    $NotifyItems = @(if ($PrevScan) { $Orphans | Where-Object { $_.New -eq 'Yes' } } else { $Orphans })
     if ($NotifyItems.Count -gt 0) {
         $NotifyMB    = Get-TotalMB $NotifyItems
         $NotifyTitle = "WinPkgScan found $($NotifyItems.Count) $(if ($PrevScan) { 'new ' })leftover app folder$(if ($NotifyItems.Count -ne 1) { 's' })"

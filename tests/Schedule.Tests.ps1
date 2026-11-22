@@ -82,7 +82,9 @@ Describe 'Scheduling (mocked Task Scheduler)' {
 
     BeforeEach {
         $env:LOCALAPPDATA = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        Mock Register-ScheduledTask { }
+        # The real commands only accept Task Scheduler objects: take the type
+        # off, so the mocks below can return simple objects.
+        Mock Register-ScheduledTask { } -RemoveParameterType 'Action', 'Trigger', 'Settings', 'Principal'
         Mock Unregister-ScheduledTask { }
         Mock Get-ScheduledTask { }
         Mock Get-ScheduledTaskInfo { }

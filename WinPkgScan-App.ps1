@@ -277,7 +277,7 @@ function Export-MarkedCsv {
 function Get-LogSummary {
     # Reads a delete log and counts what happened to each folder.
     param([string]$Path)
-    $rows = if (Test-Path -LiteralPath $Path -PathType Leaf) { @(Import-Csv -LiteralPath $Path) } else { @() }
+    $rows = @(if (Test-Path -LiteralPath $Path -PathType Leaf) { Import-Csv -LiteralPath $Path })
     $count = { param($a) @($rows | Where-Object Action -eq $a).Count }
     $mb = 0.0
     foreach ($r in @($rows | Where-Object { $_.Action -in 'Recycled', 'Deleted', 'WhatIf' })) {
