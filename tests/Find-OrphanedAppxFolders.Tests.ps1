@@ -453,15 +453,22 @@ Describe 'Scanning (mocked AppX packages)' {
             ($out -match '^NOTIFY: ') | Should -Match 'found 2 leftover app folders'
         }
 
-        It 'announces only new orphaned folders after that' {
-            & $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off 6>&1 | Out-Null
+        It 'says nothing when no orphaned folder is new' {
+            Invoke-Scan @{ ReportPath = $ReportPath; NoHistory = $false } | Should -Be 0
             $out = @(& $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -Notify 6>&1 |
                 ForEach-Object { "$_" })
-            ($out -match '^NOTIFY: ') | Should -Be 'NOTIFY: none (no new orphaned folders)'
-            New-PackageFolder -Name 'Northwind.Fresh_abc123def4567' -Bytes 2MB
-            $out = @(& $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -Notify 6>&1 |
+            @($out -match '^NOTIFY: ')[0] | Should -Be 'NOTIFY: none (no new orphaned folders)'
+        }
+
+        It 'announces only the orphaned folders that are new since the last scan' {
+            Invoke-Scan @{ ReportPath = $ReportPath; NoHistory = $false } | Should -Be 0
+            New-PackageFolder -Name 'Brand.New_abc123def4567'
+            $out = @(& $ScriptPath -ReportPath $ReportPath -Csv -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -Notify 6>&1 |
                 ForEach-Object { "$_" })
-            ($out -match '^NOTIFY: ') | Should -Match 'found 1 new leftover app folder \|'
+            $LASTEXITCODE | Should -Be 0
+            $new = @(Import-Csv -LiteralPath $CsvPath | Where-Object New -eq 'Yes').FolderName
+            $new | Should -Be 'Brand.New_abc123def4567'
+            @($out -match '^NOTIFY: ')[0] | Should -Match 'found 1 new leftover app folder ' -Because ($out -join ' / ')
         }
 
         It 'stays quiet without -Notify' {
@@ -617,12 +624,12 @@ Describe 'Real Windows run' -Tag 'Integration' -Skip:(-not $HasPackages) {
         $count | Should -BeGreaterThan 0
     }
 
-    It 'runs through Run-Scan-Unattended.bat' {
+    It 'runs through WinPkgScan.bat scan' {
         $report = Join-Path $TestDrive 'bat.txt'
-        $bat    = Join-Path $RepoRoot 'Run-Scan-Unattended.bat'
+        $bat    = Join-Path $RepoRoot 'WinPkgScan.bat'
         # Call the .bat directly. PowerShell runs it through cmd.exe and
         # quotes the arguments correctly.
-        & $bat -ReportPath $report | Out-Null
+        & $bat scan -NoHistory -ReportPath $report | Out-Null
         $LASTEXITCODE | Should -Be 0
         $report | Should -Exist
     }

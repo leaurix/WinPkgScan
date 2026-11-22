@@ -190,7 +190,7 @@ function Test-CrlfLineEnding {
     return $true
 }
 
-function Build-ModuleFolder {
+function Invoke-ModuleBuild {
     # Assembles the module in out/module/WinPkgScan and checks its manifest.
     param([string]$Version)
     $manifest = Import-PowerShellDataFile -LiteralPath (Join-Path $ModuleSource 'WinPkgScan.psd1')
@@ -266,7 +266,7 @@ function Invoke-Package {
         return $false
     }
 
-    $module = Build-ModuleFolder -Version $version
+    $module = Invoke-ModuleBuild -Version $version
 
     $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
     [System.IO.File]::WriteAllText($hashPath, "$hash  $zipName`n")
