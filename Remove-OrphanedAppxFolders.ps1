@@ -58,8 +58,9 @@
 
 .PARAMETER ExcludeFile
     A text file with one exclude pattern per line (# starts a comment).
-    If not given, two files are read: WinPkgScan.exclude.txt next to this
-    script, and your own %LOCALAPPDATA%\WinPkgScan\exclude.txt.
+    If not given, your own list is read: %LOCALAPPDATA%\WinPkgScan\exclude.txt
+    (the app's Settings edit it), plus WinPkgScan.exclude.txt next to this
+    script if you still have one from an older version.
 
 .PARAMETER LogPath
     Where to save the log CSV. Defaults to a timestamped file next to the
@@ -91,7 +92,7 @@
     Unattended run: no prompts.
 
 .NOTES
-    Version: 1.8.0
+    Version: 1.9.0
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -126,7 +127,7 @@ param(
     [switch]$NoPause
 )
 
-$ScriptVersion = "1.8.0"
+$ScriptVersion = "1.9.0"
 # Pause at the end only when this script opened its own console window
 # (a batch file or "Run with PowerShell"), so you can read the result before
 # it closes. Never from an open PowerShell prompt, the module, the app, or
@@ -763,7 +764,30 @@ Write-Host "Skipped:              $(Get-ActionCount 'Skipped')"
 Write-Host "Failed:               $FailedCount"
 Write-Host "Space freed:          $FreedMB MB"
 
+if ([string]::IsNullOrWhiteSpace($LogPath)) {
+    $csvDir  = Split-Path -Path ([System.IO.Path]::GetFullPath($CsvPath)) -Parent
+    $LogPath = Join-Path $csvDir ("WinPkgScan-DeleteLog-{0}.csv" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+}
+
+$LogSaved = $false
+try {
+    $logDir = Split-Path -Path $LogPath -Parent
+    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+        New-Item -ItemType Directory -Path $logDir -Force -WhatIf:$false -Confirm:$false | Out-Null
+    }
+    $Log | Export-Csv -LiteralPath $LogPath -NoTypeInformation -Encoding UTF8 -Force -WhatIf:$false -Confirm:$false -ErrorAction Stop
+    $LogSaved = $true
+    Write-Host ""
+    Write-Host "Log saved:" -ForegroundColor Green
+    Write-Host $LogPath
+}
+catch {
+    Write-Host ""
+    Write-Host "WARNING: Could not save the log: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
 # Add this run to the scan history (total space freed with WinPkgScan).
+# The log path lets the app restore this delete later.
 if (-not $NoHistory -and -not $WhatIfPreference -and $Removed.Count -gt 0) {
     try {
         $HistoryPath = Get-HistoryPath
@@ -773,6 +797,7 @@ if (-not $NoHistory -and -not $WhatIfPreference -and $Removed.Count -gt 0) {
             Folders = $Removed.Count
             FreedMB = $FreedMB
             Mode    = if ($Permanent) { 'Deleted' } else { 'Recycled' }
+            Log     = if ($LogSaved) { (Resolve-Path -LiteralPath $LogPath).ProviderPath } else { '' }
         })
         Save-History -History $History -Path $HistoryPath
         Write-Host "Freed with WinPkgScan so far: $(Get-FreedMB $History) MB"
@@ -780,26 +805,6 @@ if (-not $NoHistory -and -not $WhatIfPreference -and $Removed.Count -gt 0) {
     catch {
         Write-Host "WARNING: Could not update the scan history: $($_.Exception.Message)" -ForegroundColor Yellow
     }
-}
-
-if ([string]::IsNullOrWhiteSpace($LogPath)) {
-    $csvDir  = Split-Path -Path ([System.IO.Path]::GetFullPath($CsvPath)) -Parent
-    $LogPath = Join-Path $csvDir ("WinPkgScan-DeleteLog-{0}.csv" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-}
-
-try {
-    $logDir = Split-Path -Path $LogPath -Parent
-    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
-        New-Item -ItemType Directory -Path $logDir -Force -WhatIf:$false -Confirm:$false | Out-Null
-    }
-    $Log | Export-Csv -LiteralPath $LogPath -NoTypeInformation -Encoding UTF8 -Force -WhatIf:$false -Confirm:$false -ErrorAction Stop
-    Write-Host ""
-    Write-Host "Log saved:" -ForegroundColor Green
-    Write-Host $LogPath
-}
-catch {
-    Write-Host ""
-    Write-Host "WARNING: Could not save the log: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
 if (Get-ActionCount 'Recycled') {

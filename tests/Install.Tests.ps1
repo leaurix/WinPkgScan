@@ -92,7 +92,8 @@ Describe 'Installing and uninstalling (no shortcuts)' {
     It 'copies the files and marks the folder as an install' {
         $r = Invoke-Installer @{ InstallPath = $Target }
         $r.ExitCode | Should -Be 0
-        foreach ($name in 'Find-OrphanedAppxFolders.ps1', 'WinPkgScan-App.ps1', 'Install.ps1', 'WinPkgScan.ico', 'WinPkgScan.install') {
+        foreach ($name in 'Find-OrphanedAppxFolders.ps1', 'WinPkgScan-App.ps1', 'Install.ps1', 'Register-WinPkgScanSchedule.ps1',
+                          'WinPkgScan.ico', 'WinPkgScan.install') {
             Join-Path $Target $name | Should -Exist
         }
         $r.Output | Should -Match 'is installed'
@@ -105,14 +106,21 @@ Describe 'Installing and uninstalling (no shortcuts)' {
         $r.Output | Should -Match 'Preview only'
     }
 
-    It 'keeps your exclude list when updating' {
+    It 'moves an old exclude list to your own list, and removes old files, when updating' {
         Invoke-Installer @{ InstallPath = $Target } | Out-Null
-        $list = Join-Path $Target 'WinPkgScan.exclude.txt'
-        Set-Content -LiteralPath $list -Value 'Mine.*'
+        Set-Content -LiteralPath (Join-Path $Target 'WinPkgScan.exclude.txt') -Value @('# old list', 'Mine.*', 'Shared.*')
+        Set-Content -LiteralPath (Join-Path $Target 'Run-Scan.bat') -Value '@echo off'
+        $mine = Join-Path $DataDir 'exclude.txt'
+        New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+        Set-Content -LiteralPath $mine -Value @('# my list', 'Shared.*')
         $r = Invoke-Installer @{ InstallPath = $Target }
         $r.ExitCode | Should -Be 0
-        (Get-Content -LiteralPath $list) | Should -Be 'Mine.*'
-        $r.Output | Should -Match 'Kept your exclude list'
+        Join-Path $Target 'WinPkgScan.exclude.txt' | Should -Not -Exist
+        Join-Path $Target 'Run-Scan.bat' | Should -Not -Exist
+        $lines = @(Get-Content -LiteralPath $mine | ForEach-Object { $_.Trim() })
+        @($lines | Where-Object { $_ -eq 'Mine.*' }).Count | Should -Be 1
+        @($lines | Where-Object { $_ -eq 'Shared.*' }).Count | Should -Be 1
+        $r.Output | Should -Match 'Moved 1 exclude pattern'
     }
 
     It 'refuses a folder that already has other files in it' {

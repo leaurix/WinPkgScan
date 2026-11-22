@@ -77,10 +77,14 @@ BeforeAll {
     }
 
     $script:SavedLocalAppData = $env:LOCALAPPDATA
+
+    # No real Windows notifications from the -Notify tests.
+    $env:WINPKGSCAN_NO_NOTIFY = '1'
 }
 
 AfterAll {
     $env:LOCALAPPDATA = $script:SavedLocalAppData
+    Remove-Item Env:\WINPKGSCAN_NO_NOTIFY -ErrorAction SilentlyContinue
     Remove-Item -Path Function:\global:Get-AppxProvisionedPackage -ErrorAction SilentlyContinue
 }
 
@@ -398,10 +402,72 @@ Describe 'Scanning (mocked AppX packages)' {
             Invoke-Scan @{ ReportPath = $ReportPath; ExcludeFile = (Join-Path $OutDir 'missing.txt') } | Should -Be 0
         }
 
-        It 'ships an exclude file that has no active patterns' {
-            $shipped = Join-Path $RepoRoot 'WinPkgScan.exclude.txt'
-            $shipped | Should -Exist
-            @(Get-Content -LiteralPath $shipped | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') }).Count | Should -Be 0
+        It 'does not ship a second exclude list next to the scripts' {
+            Join-Path $RepoRoot 'WinPkgScan.exclude.txt' | Should -Not -Exist
+        }
+    }
+
+    Context 'app names and advice' {
+
+        BeforeEach {
+            New-PackageFolder -Name 'Microsoft.ZuneMusic_8wekyb3d8bbwe' -Bytes 1KB -Modified ([datetime]'2024-01-10')
+            Invoke-Scan @{ ReportPath = $ReportPath; Csv = $true; Html = $true } | Should -Be 0
+            $script:Rows = @(Import-Csv -LiteralPath $CsvPath)
+            function Get-Row([string]$Name) { $script:Rows | Where-Object FolderName -eq $Name }
+        }
+
+        It 'adds app name, publisher and advice columns to the CSV, after the existing ones' {
+            $header = (Get-Content -LiteralPath $CsvPath -TotalCount 1)
+            $header | Should -Match '"New","DisplayName","Publisher","Advice"$'
+        }
+
+        It 'names the app and publisher from the folder name' {
+            (Get-Row 'Contoso.Old_abc123def4567').DisplayName | Should -Be 'Old'
+            (Get-Row 'Contoso.Old_abc123def4567').Publisher   | Should -Be 'Contoso'
+            (Get-Row 'Fabrikam.Gone_8wekyb3d8bbwe').Publisher | Should -Be 'Microsoft'
+            (Get-Row 'Microsoft.ZuneMusic_8wekyb3d8bbwe').DisplayName | Should -Be 'Media Player'
+            (Get-Row 'Bad.Name_ABCIL').DisplayName | Should -Be 'Bad.Name_ABCIL'
+        }
+
+        It 'calls old orphaned folders likely safe, and recent ones check first' {
+            (Get-Row 'Contoso.Old_abc123def4567').Advice   | Should -Be 'Likely safe'
+            (Get-Row 'Fabrikam.Gone_8wekyb3d8bbwe').Advice | Should -Be 'Check first'
+            (Get-Row 'Bad.Name_ABCIL').Advice              | Should -Be 'Check first'
+            (Get-Row 'windows_ie_ac_001').Advice           | Should -Be 'Keep'
+        }
+
+        It 'totals the likely safe folders in the report and the HTML' {
+            (Get-Content -LiteralPath $ReportPath -Raw) | Should -Match 'Likely safe to remove:\s+2 '
+            $html = Get-Content -LiteralPath ([System.IO.Path]::ChangeExtension($ReportPath, '.html')) -Raw
+            $html | Should -Match 'class="adv adv-safe"'
+            $html | Should -Match 'Likely safe to remove'
+        }
+    }
+
+    Context 'notifications for scheduled scans' {
+
+        It 'announces every orphaned folder on the first scan' {
+            $out = @(& $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -Notify 6>&1 |
+                ForEach-Object { "$_" })
+            $LASTEXITCODE | Should -Be 0
+            ($out -match '^NOTIFY: ') | Should -Match 'found 2 leftover app folders'
+        }
+
+        It 'announces only new orphaned folders after that' {
+            & $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off 6>&1 | Out-Null
+            $out = @(& $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -Notify 6>&1 |
+                ForEach-Object { "$_" })
+            ($out -match '^NOTIFY: ') | Should -Be 'NOTIFY: none (no new orphaned folders)'
+            New-PackageFolder -Name 'Northwind.Fresh_abc123def4567' -Bytes 2MB
+            $out = @(& $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -Notify 6>&1 |
+                ForEach-Object { "$_" })
+            ($out -match '^NOTIFY: ') | Should -Match 'found 1 new leftover app folder \|'
+        }
+
+        It 'stays quiet without -Notify' {
+            $out = @(& $ScriptPath -ReportPath $ReportPath -NoPause -ExcludeFile $EmptyExclude -AdminChecks Off -NoHistory 6>&1 |
+                ForEach-Object { "$_" })
+            @($out -match '^NOTIFY: ').Count | Should -Be 0
         }
     }
 

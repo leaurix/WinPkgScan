@@ -60,7 +60,7 @@ Describe 'PowerShell Gallery module' {
 
         It 'exports exactly the commands the manifest lists' {
             foreach ($name in 'Find-OrphanedAppxFolders', 'Remove-OrphanedAppxFolders', 'Restore-OrphanedAppxFolders',
-                              'Install-WinPkgScan', 'Start-WinPkgScanApp') {
+                              'Install-WinPkgScan', 'Register-WinPkgScanSchedule', 'Start-WinPkgScanApp') {
                 $Mod.ExportedFunctions.Keys | Should -Contain $name
             }
             (@($Mod.ExportedFunctions.Keys | Sort-Object) -join ',') | Should -Be (@($Manifest.FunctionsToExport | Sort-Object) -join ',')
@@ -74,6 +74,8 @@ Describe 'PowerShell Gallery module' {
             (Get-Command Remove-OrphanedAppxFolders).Parameters.Keys | Should -Contain 'WhatIf'
             (Get-Command Restore-OrphanedAppxFolders).Parameters.Keys | Should -Contain 'LogPath'
             (Get-Command Find-OrphanedAppxFolders).Parameters.Keys | Should -Contain 'ProgressLines'
+            (Get-Command Find-OrphanedAppxFolders).Parameters.Keys | Should -Contain 'Notify'
+            (Get-Help Register-WinPkgScanSchedule).Synopsis | Should -Match 'scheduled'
         }
 
         It 'runs the script from the module folder, and its exit code does not end the session' {

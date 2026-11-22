@@ -50,8 +50,9 @@
 
 .PARAMETER ExcludeFile
     A text file with one exclude pattern per line (# starts a comment).
-    If not given, two files are read: WinPkgScan.exclude.txt next to this
-    script, and your own %LOCALAPPDATA%\WinPkgScan\exclude.txt.
+    If not given, your own list is read: %LOCALAPPDATA%\WinPkgScan\exclude.txt
+    (the app's Settings edit it), plus WinPkgScan.exclude.txt next to this
+    script if you still have one from an older version.
 
 .PARAMETER AdminChecks
     Auto (default): run the extra checks when running as administrator.
@@ -60,6 +61,11 @@
 .PARAMETER ProgressLines
     Print a "PROGRESS n/total folder" line for each folder. Used by the app
     to show a progress bar.
+
+.PARAMETER Notify
+    Show a Windows notification when orphaned folders are found that were
+    not there at the last scan. Clicking it opens the HTML report (with
+    -Html). Used by the scheduled scan.
 
 .PARAMETER NoHistory
     Do not read or update the scan history. The history is kept in
@@ -76,7 +82,7 @@
     .\Find-OrphanedAppxFolders.ps1 -Csv -Html -Open -Exclude '*Teams*'
 
 .NOTES
-    Version: 1.8.0
+    Version: 1.9.0
 #>
 
 [CmdletBinding()]
@@ -91,10 +97,11 @@ param(
     [ValidateSet('Auto', 'On', 'Off')]
     [string]$AdminChecks = 'Auto',
     [switch]$NoHistory,
-    [switch]$ProgressLines
+    [switch]$ProgressLines,
+    [switch]$Notify
 )
 
-$ScriptVersion = "1.8.0"
+$ScriptVersion = "1.9.0"
 # Pause at the end only when this script opened its own console window
 # (a batch file or "Run with PowerShell"), so you can read the result before
 # it closes. Never from an open PowerShell prompt, the module, the app, or
@@ -125,9 +132,10 @@ function Write-ResultTable {
     # even when output is redirected to a file or log.
     $Items |
         Format-Table FolderName,
+            @{Name = "App"; Expression = { $_.DisplayName }},
             @{Name = "Size (MB)"; Expression = { $_.SizeMB }},
             @{Name = "Last Modified"; Expression = { $_.LastModified }},
-            New, Notes -AutoSize |
+            Advice, New, Notes -AutoSize |
         Out-String -Width 250 |
         Write-Host
 }
@@ -150,6 +158,8 @@ function Add-ReportSection {
     }
     foreach ($Item in $Items) {
         $Report.Add("Folder        : $($Item.FolderName)")
+        $Report.Add("App           : $($Item.DisplayName)$(if ($Item.Publisher) { " ($($Item.Publisher))" })")
+        $Report.Add("Advice        : $($Item.Advice) - $($Item.AdviceReason)")
         $Report.Add("Size          : $($Item.SizeMB) MB")
         $Report.Add("Last Modified : $($Item.LastModified)")
         $Report.Add("Path          : $($Item.FullPath)")
@@ -191,6 +201,169 @@ function Get-MatchingPattern {
         if ($Name -like $p) { return $p }
     }
     return $null
+}
+
+# Friendly names for common apps whose package name says little.
+$KnownAppNames = @{
+    'Microsoft.549981C3F5F10'                = 'Cortana'
+    'Microsoft.ZuneMusic'                    = 'Media Player'
+    'Microsoft.ZuneVideo'                    = 'Films & TV'
+    'Microsoft.SkypeApp'                     = 'Skype'
+    'Microsoft.YourPhone'                    = 'Phone Link'
+    'Microsoft.BingWeather'                  = 'Weather'
+    'Microsoft.BingNews'                     = 'News'
+    'Microsoft.GetHelp'                      = 'Get Help'
+    'Microsoft.Getstarted'                   = 'Tips'
+    'Microsoft.MicrosoftSolitaireCollection' = 'Solitaire Collection'
+    'Microsoft.MicrosoftStickyNotes'         = 'Sticky Notes'
+    'Microsoft.MicrosoftOfficeHub'           = 'Microsoft 365 (Office)'
+    'Microsoft.Office.OneNote'               = 'OneNote for Windows 10'
+    'Microsoft.OutlookForWindows'            = 'Outlook (new)'
+    'microsoft.windowscommunicationsapps'    = 'Mail and Calendar'
+    'Microsoft.WindowsAlarms'                = 'Clock'
+    'Microsoft.WindowsCamera'                = 'Camera'
+    'Microsoft.WindowsCalculator'            = 'Calculator'
+    'Microsoft.WindowsMaps'                  = 'Maps'
+    'Microsoft.WindowsSoundRecorder'         = 'Sound Recorder'
+    'Microsoft.WindowsFeedbackHub'           = 'Feedback Hub'
+    'Microsoft.WindowsNotepad'               = 'Notepad'
+    'Microsoft.WindowsTerminal'              = 'Terminal'
+    'Microsoft.Windows.Photos'               = 'Photos'
+    'Microsoft.ScreenSketch'                 = 'Snipping Tool'
+    'Microsoft.Todos'                        = 'Microsoft To Do'
+    'Microsoft.People'                       = 'People'
+    'Microsoft.XboxApp'                      = 'Xbox Console Companion'
+    'Microsoft.GamingApp'                    = 'Xbox'
+    'Microsoft.Microsoft3DViewer'            = '3D Viewer'
+    'Microsoft.MixedReality.Portal'          = 'Mixed Reality Portal'
+    'Microsoft.PowerAutomateDesktop'         = 'Power Automate'
+    'MicrosoftTeams'                         = 'Microsoft Teams (classic)'
+    'MSTeams'                                = 'Microsoft Teams'
+}
+
+# Publishers by the 13-character publisher ID at the end of the folder name.
+$KnownPublishers = @{
+    '8wekyb3d8bbwe' = 'Microsoft'
+    'cw5n1h2txyewy' = 'Microsoft Windows'
+    'kzf8qxf38zg5c' = 'Microsoft (Skype)'
+    'yxz26nhyzhsrt' = 'Clipchamp'
+    'zpdnekdrzrea0' = 'Spotify'
+    'cv1g1gvanyjgm' = 'WhatsApp'
+}
+
+function ConvertTo-SpacedName {
+    # "WhatsAppDesktop" -> "WhatsApp Desktop", "Windows.Photos" -> "Windows Photos"
+    param([string]$Text)
+    $t = $Text -replace '[._-]+', ' '
+    $t = [regex]::Replace($t, '(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])', ' ')
+    # Names that are written as one word.
+    foreach ($word in 'WhatsApp', 'YouTube', 'OneNote', 'OneDrive', 'PowerPoint', 'LinkedIn', 'TikTok', 'PlayStation', 'GitHub', 'iTunes', 'iCloud') {
+        $split = [regex]::Replace($word, '(?<=[a-z0-9])(?=[A-Z])', ' ')
+        $t = $t -replace [regex]::Escape($split), $word
+    }
+    return ($t -replace '\s+', ' ').Trim()
+}
+
+function Get-AppIdentity {
+    # A friendly app name and publisher, worked out from the folder name.
+    param([string]$FolderName)
+    $name = $FolderName
+    $id   = ''
+    $m = [regex]::Match($FolderName, '^(.+)_([0-9a-hjkmnp-tv-z]{13})$', 'IgnoreCase')
+    if ($m.Success) { $name = $m.Groups[1].Value; $id = $m.Groups[2].Value.ToLowerInvariant() }
+    elseif ($FolderName -like 'windows_ie_ac_*') {
+        return [PSCustomObject]@{ DisplayName = 'Internet Explorer app container'; Publisher = 'Microsoft Windows' }
+    }
+    else {
+        return [PSCustomObject]@{ DisplayName = $FolderName; Publisher = '' }
+    }
+
+    $parts  = @($name -split '\.')
+    $vendor = if ($parts.Count -gt 1) { $parts[0] } else { '' }
+    $display = $null
+    foreach ($key in $KnownAppNames.Keys) {
+        if ([string]::Equals($key, $name, [StringComparison]::OrdinalIgnoreCase)) { $display = $KnownAppNames[$key]; break }
+    }
+    if (-not $display) {
+        $rest = if ($parts.Count -gt 1) { ($parts[1..($parts.Count - 1)] -join '.') } else { $name }
+        $display = ConvertTo-SpacedName $rest
+        if (-not $display) { $display = $name }
+    }
+
+    $publisher = ''
+    if ($KnownPublishers.ContainsKey($id)) { $publisher = $KnownPublishers[$id] }
+    elseif ($vendor -and $vendor -notmatch '^[0-9A-F]{6,}$' -and $vendor -match '[A-Za-z]{3}') { $publisher = ConvertTo-SpacedName $vendor }
+    else { $publisher = "Unknown ($id)" }
+    return [PSCustomObject]@{ DisplayName = $display; Publisher = $publisher }
+}
+
+function Get-RemovalAdvice {
+    # Likely safe, Check first or Keep, with the reason.
+    param([string]$Category, [int]$AgeDays, [string]$Notes)
+    if ($Category -eq 'Windows component') {
+        return [PSCustomObject]@{ Advice = 'Keep'; Reason = 'Part of Windows' }
+    }
+    if ($Category -ne 'Orphaned package') {
+        return [PSCustomObject]@{ Advice = 'Check first'; Reason = 'Not named like an app package. Often used by Windows' }
+    }
+    if ($AgeDays -lt 30) {
+        return [PSCustomObject]@{ Advice = 'Check first'; Reason = "Changed $AgeDays day$(if ($AgeDays -ne 1) { 's' }) ago. The remover skips folders changed in the last 30 days" }
+    }
+    if ($Notes -match 'Provisioned') {
+        return [PSCustomObject]@{ Advice = 'Check first'; Reason = 'Windows may reinstall this app' }
+    }
+    if ($AgeDays -lt 90) {
+        return [PSCustomObject]@{ Advice = 'Check first'; Reason = "Changed $AgeDays days ago" }
+    }
+    return [PSCustomObject]@{ Advice = 'Likely safe'; Reason = "App not installed, nothing changed for $AgeDays days" }
+}
+
+function Show-ScanNotification {
+    # A Windows notification. Clicking it opens $OpenPath, if given.
+    param([string]$Title, [string]$Text, [string]$OpenPath)
+    # WINPKGSCAN_NO_NOTIFY turns notifications off, for the tests.
+    if ([Environment]::OSVersion.Platform -ne 'Win32NT' -or $env:WINPKGSCAN_NO_NOTIFY) { return }
+    $shown = $false
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        try {
+            [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+            [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+            $launch = ''
+            if ($OpenPath -and (Test-Path -LiteralPath $OpenPath)) {
+                $launch = ' activationType="protocol" launch="' + [System.Security.SecurityElement]::Escape(([System.Uri]$OpenPath).AbsoluteUri) + '"'
+            }
+            $xmlText = '<toast' + $launch + '><visual><binding template="ToastGeneric"><text>' +
+                [System.Security.SecurityElement]::Escape($Title) + '</text><text>' +
+                [System.Security.SecurityElement]::Escape($Text) + '</text></binding></visual></toast>'
+            $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+            $doc.LoadXml($xmlText)
+            $toast = New-Object Windows.UI.Notifications.ToastNotification $doc
+            $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+            [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
+            $shown = $true
+        }
+        catch {
+            Write-Verbose "Toast notification failed: $($_.Exception.Message)"
+        }
+    }
+    if (-not $shown) {
+        try {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $tray = New-Object System.Windows.Forms.NotifyIcon
+            # Looked up at run time: System.Drawing only loads on Windows.
+            $icons = 'System.Drawing.SystemIcons' -as [type]
+            $tray.Icon = $icons::Information
+            $tray.BalloonTipTitle = $Title
+            $tray.BalloonTipText  = $Text
+            $tray.Visible = $true
+            $tray.ShowBalloonTip(10000)
+            Start-Sleep -Seconds 6
+            $tray.Dispose()
+        }
+        catch {
+            Write-Verbose "Notification failed: $($_.Exception.Message)"
+        }
+    }
 }
 
 function Test-WindowsComponent {
@@ -259,6 +432,9 @@ th[data-dir="desc"]::after { content:" \25BC"; font-size:10px; }
 td.num, th.num { text-align:right; }
 td.path { color:var(--muted); font-size:12px; }
 td.notes { color:var(--warn); font-size:12px; }
+td.pub { color:var(--muted); }
+.adv { display:inline-block; padding:0 8px; border-radius:6px; font-size:12px; border:1px solid currentColor; }
+.adv-safe { color:var(--keep); } .adv-check { color:var(--warn); } .adv-keep { color:var(--muted); }
 tr.marked td { background:var(--mark); }
 tr:last-child td { border-bottom:none; }
 input[type=checkbox] { width:16px; height:16px; cursor:pointer; }
@@ -288,7 +464,8 @@ footer { color:var(--muted); font-size:12px; margin-top:32px; }
 </div>
 <div class="note">Nothing was deleted or modified. To remove folders:
 <ol><li>Tick the orphaned folders to remove, then click <b>Save marked CSV</b>. It goes to your Downloads folder.</li>
-<li>Double-click <b>Run-Delete.bat</b>, or choose <b>Delete</b> in <b>WinPkgScan.bat</b>. It uses the newest marked file, re-checks every folder and moves it to the Recycle Bin.</li></ol></div>
+<li>Choose <b>Delete</b> in <b>WinPkgScan.bat</b>, or drag the file onto it. It uses the newest marked file, re-checks every folder and moves it to the Recycle Bin.</li></ol>
+<b>Likely safe</b> means the app is not installed and nothing in the folder changed for 90 days or more. Hover over the advice to see why.</div>
 <input id="filter" type="search" placeholder="Filter by name or path" aria-label="Filter">
 '@)
 
@@ -304,7 +481,7 @@ footer { color:var(--muted); font-size:12px; margin-top:32px; }
             if ($markable) {
                 [void]$sb.Append("<th class=`"sel`"><input type=`"checkbox`" class=`"all`" aria-label=`"Mark all shown`"></th>")
             }
-            [void]$sb.Append("<th>Folder</th><th class=`"num`" data-type=`"num`">Size (MB)</th><th>Last modified</th><th>Notes</th><th>Path</th></tr></thead><tbody>`n")
+            [void]$sb.Append("<th>Folder</th><th>App</th><th>Publisher</th><th>Advice</th><th class=`"num`" data-type=`"num`">Size (MB)</th><th>Last modified</th><th>Notes</th><th>Path</th></tr></thead><tbody>`n")
             foreach ($i in $sec.Items) {
                 $size = ([double]$i.SizeMB).ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture)
                 $attr = ''
@@ -319,7 +496,9 @@ footer { color:var(--muted); font-size:12px; margin-top:32px; }
                     [void]$sb.Append("<td class=`"sel`"><input type=`"checkbox`" class=`"mark`" aria-label=`"Mark $(ConvertTo-HtmlText $i.FolderName)`"></td>")
                 }
                 $badge = if ($i.New -eq 'Yes') { ' <span class="new">New</span>' } else { '' }
-                [void]$sb.Append("<td>$(ConvertTo-HtmlText $i.FolderName)$badge</td><td class=`"num`" data-v=`"$size`">$size</td><td>$(ConvertTo-HtmlText $i.LastModified)</td><td class=`"notes`">$(ConvertTo-HtmlText $i.Notes)</td><td class=`"path`">$(ConvertTo-HtmlText $i.FullPath)</td></tr>`n")
+                $advClass = switch ($i.Advice) { 'Likely safe' { 'adv-safe' } 'Keep' { 'adv-keep' } default { 'adv-check' } }
+                [void]$sb.Append("<td>$(ConvertTo-HtmlText $i.FolderName)$badge</td><td>$(ConvertTo-HtmlText $i.DisplayName)</td><td class=`"pub`">$(ConvertTo-HtmlText $i.Publisher)</td>")
+                [void]$sb.Append("<td><span class=`"adv $advClass`" title=`"$(ConvertTo-HtmlText $i.AdviceReason)`">$(ConvertTo-HtmlText $i.Advice)</span></td><td class=`"num`" data-v=`"$size`">$size</td><td>$(ConvertTo-HtmlText $i.LastModified)</td><td class=`"notes`">$(ConvertTo-HtmlText $i.Notes)</td><td class=`"path`">$(ConvertTo-HtmlText $i.FullPath)</td></tr>`n")
             }
             [void]$sb.Append("</tbody></table>`n")
         }
@@ -748,6 +927,11 @@ foreach ($Folder in $Folders) {
         }
     }
 
+    $Notes    = ($NoteParts -join '; ')
+    $AgeDays  = [int][math]::Max(0, [math]::Floor(((Get-Date) - $Newest).TotalDays))
+    $Identity = Get-AppIdentity -FolderName $Folder.Name
+    $Advice   = Get-RemovalAdvice -Category $Category -AgeDays $AgeDays -Notes $Notes
+
     $Results.Add(
         [PSCustomObject]@{
             Category     = $Category
@@ -756,8 +940,12 @@ foreach ($Folder in $Folders) {
             LastModified = $Newest.ToString("yyyy-MM-dd")
             FullPath     = $Folder.FullName
             Status       = $Status
-            Notes        = ($NoteParts -join '; ')
+            Notes        = $Notes
             New          = if ($PrevScan -and -not $PrevNames.Contains($Folder.Name)) { 'Yes' } else { '' }
+            DisplayName  = $Identity.DisplayName
+            Publisher    = $Identity.Publisher
+            Advice       = $Advice.Advice
+            AdviceReason = $Advice.Reason
         }
     )
 }
@@ -776,6 +964,8 @@ $WinMB    = Get-TotalMB $WinParts
 $OtherMB  = Get-TotalMB $Others
 
 $NewCount = @(@($Orphans) + @($Others) | Where-Object { $_.New -eq 'Yes' }).Count
+$SafeItems = @($Orphans | Where-Object { $_.Advice -eq 'Likely safe' })
+$SafeMB    = Get-TotalMB $SafeItems
 if ($History) {
     $NewText   = if ($PrevScan) { "$NewCount (last scan $($PrevScan.Time))" } else { "first scan" }
     $FreedText = "$(Get-FreedMB $History) MB"
@@ -792,6 +982,7 @@ Write-Host ""
 Write-Host "Folders scanned:          $($Folders.Count)"
 Write-Host "Registered packages:      $($InstalledFamilyNames.Count)"
 Write-Host "Orphaned package folders: $($Orphans.Count) ($OrphanMB MB)"
+Write-Host "  Likely safe to remove:  $($SafeItems.Count) ($SafeMB MB)"
 Write-Host "Windows components:       $($WinParts.Count) ($WinMB MB)"
 Write-Host "Other folders:            $($Others.Count) ($OtherMB MB)"
 Write-Host "Excluded:                 $($Excluded.Count)"
@@ -843,6 +1034,7 @@ $Report.Add("")
 $Report.Add("Folders scanned:          $($Folders.Count)")
 $Report.Add("Registered packages:      $($InstalledFamilyNames.Count)")
 $Report.Add("Orphaned package folders: $($Orphans.Count) ($OrphanMB MB)")
+$Report.Add("  Likely safe to remove:  $($SafeItems.Count) ($SafeMB MB)")
 $Report.Add("Windows components:       $($WinParts.Count) ($WinMB MB)")
 $Report.Add("Other folders:            $($Others.Count) ($OtherMB MB)")
 $Report.Add("Excluded:                 $($Excluded.Count)")
@@ -893,13 +1085,14 @@ try {
 
     if ($Csv) {
         $CsvRows = @(@($Orphans) + @($WinParts) + @($Others) |
-            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status, Notes, New)
+            Select-Object @{ Name = 'Delete'; Expression = { '' } }, Category, FolderName, SizeMB, LastModified, FullPath, Status, Notes, New,
+                DisplayName, Publisher, Advice)
         if ($CsvRows.Count -gt 0) {
             $CsvRows | Export-Csv -LiteralPath $CsvPath -NoTypeInformation -Encoding UTF8 -Force -ErrorAction Stop
         }
         else {
             # Nothing found: still write the header row, so the file is a valid CSV.
-            '"Delete","Category","FolderName","SizeMB","LastModified","FullPath","Status","Notes","New"' |
+            '"Delete","Category","FolderName","SizeMB","LastModified","FullPath","Status","Notes","New","DisplayName","Publisher","Advice"' |
                 Out-File -LiteralPath $CsvPath -Encoding UTF8 -Force -ErrorAction Stop
         }
         Write-Host "CSV created:" -ForegroundColor Green
@@ -909,6 +1102,7 @@ try {
     if ($Html) {
         $tiles = @(
             [PSCustomObject]@{ Label = "Orphaned package folders"; Value = "$($Orphans.Count) ($OrphanMB MB)" }
+            [PSCustomObject]@{ Label = "Likely safe to remove"; Value = "$($SafeItems.Count) ($SafeMB MB)" }
             [PSCustomObject]@{ Label = "Windows components (keep)"; Value = "$($WinParts.Count)" }
             [PSCustomObject]@{ Label = "Other folders"; Value = "$($Others.Count)" }
             [PSCustomObject]@{ Label = "Excluded"; Value = "$($Excluded.Count)" }
@@ -968,6 +1162,23 @@ if ($History) {
     }
     catch {
         Write-Host "WARNING: Could not save the scan history: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Scheduled scans: tell the user about new orphaned folders.
+if ($Notify) {
+    $NotifyItems = if ($PrevScan) { @($Orphans | Where-Object { $_.New -eq 'Yes' }) } else { @($Orphans) }
+    if ($NotifyItems.Count -gt 0) {
+        $NotifyMB    = Get-TotalMB $NotifyItems
+        $NotifyTitle = "WinPkgScan found $($NotifyItems.Count) $(if ($PrevScan) { 'new ' })leftover app folder$(if ($NotifyItems.Count -ne 1) { 's' })"
+        $NotifyText  = "$NotifyMB MB could be freed. Open WinPkgScan to review them."
+        Write-Host ""
+        Write-Host "NOTIFY: $NotifyTitle | $NotifyText"
+        Show-ScanNotification -Title $NotifyTitle -Text $NotifyText -OpenPath $(if ($Html) { $HtmlPath } else { '' })
+    }
+    else {
+        Write-Host ""
+        Write-Host "NOTIFY: none (no new orphaned folders)"
     }
 }
 

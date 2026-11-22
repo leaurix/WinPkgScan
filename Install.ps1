@@ -9,10 +9,12 @@
     WinPkgScan to Settings > Apps so it can be uninstalled there.
     No administrator rights are needed.
 
-    Run it again from a newer download to update. Your exclude list in the
-    install folder is kept.
+    Run it again from a newer download to update. Files from older versions
+    are removed, and an old exclude list next to the scripts is moved to
+    your own list in %LOCALAPPDATA%\WinPkgScan\exclude.txt.
 
-    -Uninstall removes the files, the shortcuts and the Settings entry. It
+    -Uninstall removes the files, the shortcuts, the Settings entry and the
+    scheduled scan. It
     only removes the WinPkgScan files: anything else in the folder is left.
     Your scan history, settings and exclude list in
     %LOCALAPPDATA%\WinPkgScan are kept unless you add -RemoveData.
@@ -63,7 +65,7 @@
     Removes WinPkgScan, and keeps your history and settings.
 
 .NOTES
-    Version: 1.8.0
+    Version: 1.9.0
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
@@ -92,7 +94,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = "1.8.0"
+$ScriptVersion = "1.9.0"
 
 # Files that make up WinPkgScan. The first four are required.
 $RequiredFiles = @(
@@ -100,9 +102,13 @@ $RequiredFiles = @(
     'Restore-OrphanedAppxFolders.ps1', 'WinPkgScan-App.ps1'
 )
 $OptionalFiles = @(
-    'WinPkgScan.bat', 'WinPkgScan-App.bat', 'Run-Scan.bat', 'Run-Scan-Unattended.bat', 'Run-Delete.bat',
-    'WinPkgScan.exclude.txt', 'WinPkgScan.ico', 'README.md', 'LICENSE', 'Install.ps1', 'Install.bat'
+    'WinPkgScan.bat', 'WinPkgScan-App.bat', 'Register-WinPkgScanSchedule.ps1',
+    'WinPkgScan.ico', 'README.md', 'LICENSE', 'Install.ps1', 'Install.bat'
 )
+# Files from older versions, removed when updating or uninstalling.
+$OldFiles = @('Run-Scan.bat', 'Run-Scan-Unattended.bat', 'Run-Delete.bat')
+$OldExcludeName = 'WinPkgScan.exclude.txt'
+$ScheduleTaskName = 'WinPkgScan scheduled scan'
 $MarkerName   = 'WinPkgScan.install'
 $ShortcutName = 'WinPkgScan.lnk'
 
@@ -243,15 +249,62 @@ function Install-WinPkgScanFile {
         $from = Join-Path $Source $name
         $to   = Join-Path $Target $name
         if (-not (Test-Path -LiteralPath $from -PathType Leaf)) { continue }
-        if ($name -eq 'WinPkgScan.exclude.txt' -and (Test-Path -LiteralPath $to)) {
-            Write-Host "  Kept your exclude list: $to"
-            continue
-        }
         Copy-Item -LiteralPath $from -Destination $to -Force
         $copied++
     }
+    foreach ($name in $OldFiles) {
+        $old = Join-Path $Target $name
+        if (Test-Path -LiteralPath $old -PathType Leaf) { Remove-Item -LiteralPath $old -Force }
+    }
+    Move-OldExcludeList -Target $Target
     Write-InstallMarker -Target $Target
     return $copied
+}
+
+function Get-UserExcludePath {
+    if (-not $env:LOCALAPPDATA) { return $null }
+    return Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'exclude.txt'
+}
+
+function Move-OldExcludeList {
+    # Older versions kept the exclude list next to the scripts. Its patterns
+    # move to your own list in %LOCALAPPDATA%\WinPkgScan, which the app and
+    # the scripts all use.
+    param([string]$Target)
+    $old = Join-Path $Target $OldExcludeName
+    $mine = Get-UserExcludePath
+    if (-not (Test-Path -LiteralPath $old -PathType Leaf) -or -not $mine) { return }
+    $patterns = @(Get-Content -LiteralPath $old | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+    $existing = @()
+    if (Test-Path -LiteralPath $mine) {
+        $existing = @(Get-Content -LiteralPath $mine | ForEach-Object { $_.Trim() })
+    }
+    $new = @($patterns | Where-Object { $existing -notcontains $_ })
+    if ($new.Count -gt 0) {
+        $dir = Split-Path -Path $mine -Parent
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        if (-not (Test-Path -LiteralPath $mine)) {
+            Set-Content -LiteralPath $mine -Encoding UTF8 -Value '# Your WinPkgScan exclude list. One folder name or pattern per line.'
+        }
+        Add-Content -LiteralPath $mine -Encoding UTF8 -Value $new
+        Write-Host "  Moved $($new.Count) exclude pattern$(if ($new.Count -ne 1) { 's' }) to your list: $mine"
+    }
+    Remove-Item -LiteralPath $old -Force
+}
+
+function Unregister-OurSchedule {
+    # Removes the scheduled scan if it runs the scanner in this folder.
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([string]$Folder)
+    if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { return }
+    $task = Get-ScheduledTask -TaskName $ScheduleTaskName -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $task) { return }
+    $arguments = (@($task.Actions) | ForEach-Object { "$($_.Arguments)" }) -join ' '
+    if ($arguments.IndexOf($Folder, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return }
+    if ($PSCmdlet.ShouldProcess($ScheduleTaskName, 'Remove the scheduled scan')) {
+        Unregister-ScheduledTask -TaskName $ScheduleTaskName -Confirm:$false -ErrorAction Stop
+        Write-Host "  Removed the scheduled scan"
+    }
 }
 
 function Write-InstallMarker {
@@ -272,7 +325,8 @@ function Uninstall-WinPkgScanFile {
     # Removes the WinPkgScan files, then the folder if nothing else is left.
     param([string]$Target)
     $removed = 0
-    foreach ($name in @($RequiredFiles) + @($OptionalFiles) + @($MarkerName)) {
+    Move-OldExcludeList -Target $Target
+    foreach ($name in @($RequiredFiles) + @($OptionalFiles) + @($OldFiles) + @($MarkerName)) {
         $path = Join-Path $Target $name
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             Remove-Item -LiteralPath $path -Force
@@ -322,6 +376,7 @@ try {
             Remove-Item -LiteralPath $UninstallKey -Recurse -Force
             Write-Host "  Removed WinPkgScan from Settings > Apps"
         }
+        Unregister-OurSchedule -Folder $InstallPath
         if (Test-Path -LiteralPath $InstallPath) {
             $count = Uninstall-WinPkgScanFile -Target $InstallPath
             Write-Host "  Removed $count file$(if ($count -ne 1) { 's' })"

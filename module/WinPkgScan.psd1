@@ -1,6 +1,6 @@
 @{
     RootModule           = 'WinPkgScan.psm1'
-    ModuleVersion        = '1.8.0'
+    ModuleVersion        = '1.9.0'
     GUID                 = 'b1db2dd6-a2ac-457c-accf-1bf3ebfc1b50'
     Author               = 'Louis Yvan Alcayde'
     CompanyName          = 'Louis Yvan Alcayde'
@@ -14,6 +14,7 @@
         'Remove-OrphanedAppxFolders'
         'Restore-OrphanedAppxFolders'
         'Install-WinPkgScan'
+        'Register-WinPkgScanSchedule'
         'Start-WinPkgScanApp'
     )
     CmdletsToExport      = @()
@@ -29,7 +30,7 @@
         'Restore-OrphanedAppxFolders.ps1'
         'WinPkgScan-App.ps1'
         'Install.ps1'
-        'WinPkgScan.exclude.txt'
+        'Register-WinPkgScanSchedule.ps1'
         'WinPkgScan.ico'
         'README.md'
         'LICENSE'

@@ -7,3 +7,11 @@ Orphaned-Appx-Packages.csv
 
 # Downloaded zips
 *.zip
+
+# Other reports and logs from local runs
+Orphaned-Appx-Packages.html
+WinPkgScan-marked*.csv
+WinPkgScan-DeleteLog-*.csv
+
+# Editor settings
+.vscode/

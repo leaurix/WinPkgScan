@@ -8,6 +8,7 @@
 #   Remove-OrphanedAppxFolders    remove the folders marked in the CSV
 #   Restore-OrphanedAppxFolders   put removed folders back from the Recycle Bin
 #   Install-WinPkgScan            add Start menu and desktop shortcuts to the app
+#   Register-WinPkgScanSchedule   turn the scheduled scan on or off
 #   Start-WinPkgScanApp           open the app
 #
 # Get-Help <command> -Full shows every option.
@@ -19,6 +20,7 @@ $ScriptCommands = [ordered]@{
     'Remove-OrphanedAppxFolders'  = 'Remove-OrphanedAppxFolders.ps1'
     'Restore-OrphanedAppxFolders' = 'Restore-OrphanedAppxFolders.ps1'
     'Install-WinPkgScan'          = 'Install.ps1'
+    'Register-WinPkgScanSchedule' = 'Register-WinPkgScanSchedule.ps1'
 }
 
 # Build a small function for each script, with the script's own help and

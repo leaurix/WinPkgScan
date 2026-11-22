@@ -192,6 +192,14 @@ Describe 'Removing (mocked AppX packages)' {
             @($h.Removals)[0].Mode | Should -Be 'Deleted'
         }
 
+        It 'records where the delete log is, so the app can restore this delete later' {
+            New-TestCsv -Marked $OrphanA
+            (Invoke-Remove @{ Permanent = $true; NoHistory = $false }).ExitCode | Should -Be 0
+            $file = Join-Path (Join-Path $env:LOCALAPPDATA 'WinPkgScan') 'history.json'
+            $h = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+            @($h.Removals)[0].Log | Should -Be (Resolve-Path -LiteralPath $LogPath).ProviderPath
+        }
+
         It 'records nothing with -WhatIf' {
             New-TestCsv -Marked $OrphanA
             Invoke-Remove @{ Permanent = $true; WhatIf = $true; NoHistory = $false } | Out-Null
@@ -634,23 +642,17 @@ Describe 'Recycle Bin and batch files on Windows' -Tag 'Integration' -Skip:(-not
         $DirB | Should -Exist
     }
 
-    It 'Run-Scan.bat saves a CSV by default' {
+    It 'WinPkgScan.bat scan saves a CSV and an HTML report' {
         $report = Join-Path $WorkDir 'bat-scan.txt'
-        & (Join-Path $RepoRoot 'Run-Scan.bat') -NoPause -NoHistory -ReportPath $report | Out-Null
+        & (Join-Path $RepoRoot 'WinPkgScan.bat') scan -NoHistory -ReportPath $report | Out-Null
         $LASTEXITCODE | Should -Be 0
         [System.IO.Path]::ChangeExtension($report, '.csv') | Should -Exist
+        [System.IO.Path]::ChangeExtension($report, '.html') | Should -Exist
     }
 
-    It 'Run-Scan.bat accepts -Csv without passing it twice' {
-        $report = Join-Path $WorkDir 'bat-scan2.txt'
-        & (Join-Path $RepoRoot 'Run-Scan.bat') -Csv -NoPause -NoHistory -ReportPath $report | Out-Null
-        $LASTEXITCODE | Should -Be 0
-        [System.IO.Path]::ChangeExtension($report, '.csv') | Should -Exist
-    }
-
-    It 'Run-Delete.bat deletes the marked folder' {
+    It 'deletes the folders marked in a CSV given to WinPkgScan.bat, as when it is dragged onto it' {
         New-TestCsv -Marked $OrphanB
-        & (Join-Path $RepoRoot 'Run-Delete.bat') $CsvPath -Permanent -Force -NoPause -NoHistory -LogPath $LogPath | Out-Null
+        & (Join-Path $RepoRoot 'WinPkgScan.bat') $CsvPath -Permanent -Force -NoHistory -LogPath $LogPath | Out-Null
         $LASTEXITCODE | Should -Be 0
         $DirB | Should -Not -Exist
         $DirA | Should -Exist

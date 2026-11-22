@@ -3,11 +3,14 @@ rem ============================================================
 rem WinPkgScan.bat
 rem One menu for everything: double-click to open it.
 rem
+rem Drag a marked CSV onto this file to remove the folders marked in it.
+rem
 rem Direct commands (no menu, no pauses), for scripts or Task Scheduler:
 rem   WinPkgScan.bat scan     [options]
 rem   WinPkgScan.bat preview  [options]
 rem   WinPkgScan.bat delete   [options]   e.g. delete -Force
 rem   WinPkgScan.bat restore  [options]
+rem   WinPkgScan.bat schedule [options]   e.g. schedule -Frequency Weekly
 rem Options are passed to the PowerShell script.
 rem ============================================================
 setlocal EnableExtensions
@@ -15,15 +18,40 @@ set "HERE=%~dp0"
 set "SCAN=%HERE%Find-OrphanedAppxFolders.ps1"
 set "REMOVE=%HERE%Remove-OrphanedAppxFolders.ps1"
 set "RESTORE=%HERE%Restore-OrphanedAppxFolders.ps1"
+set "SCHEDULE=%HERE%Register-WinPkgScanSchedule.ps1"
+set "USERLIST=%LOCALAPPDATA%\WinPkgScan\exclude.txt"
 set "PS=powershell.exe -NoProfile -ExecutionPolicy Bypass -File"
 
 if not exist "%SCAN%" goto missing
 if not exist "%REMOVE%" goto missing
 if not exist "%RESTORE%" goto missing
 
-rem ---- Direct commands ------------------------------------------
-set "CMD=%~1"
+rem ---- A CSV dragged onto this file -------------------------------
 set "REST="
+set "HASREST="
+if /i not "%~x1"==".csv" goto commands
+if not exist "%~1" goto commands
+set "DROPPED=%~f1"
+:collect_drop
+shift
+if "%~1"=="" goto drop_delete
+set REST=%REST% %1
+set "HASREST=1"
+goto collect_drop
+
+:drop_delete
+%PS% "%REMOVE%" -CsvPath "%DROPPED%" -NoPause %REST%
+set "CODE=%ERRORLEVEL%"
+rem Extra options mean a script called this: do not wait.
+if not defined HASREST (
+    echo.
+    pause
+)
+exit /b %CODE%
+
+rem ---- Direct commands ------------------------------------------
+:commands
+set "CMD=%~1"
 if "%CMD%"=="" goto menu
 :collect
 shift
@@ -36,8 +64,9 @@ if /i "%CMD%"=="scan"    goto direct_scan
 if /i "%CMD%"=="preview" goto direct_preview
 if /i "%CMD%"=="delete"  goto direct_delete
 if /i "%CMD%"=="restore" goto direct_restore
+if /i "%CMD%"=="schedule" goto direct_schedule
 echo Unknown command: %CMD%
-echo Use: WinPkgScan.bat [scan ^| preview ^| delete ^| restore] [options]
+echo Use: WinPkgScan.bat [scan ^| preview ^| delete ^| restore ^| schedule] [options]
 exit /b 2
 
 :direct_scan
@@ -50,6 +79,11 @@ exit /b %ERRORLEVEL%
 
 :direct_delete
 %PS% "%REMOVE%" -NoPause %REST%
+exit /b %ERRORLEVEL%
+
+:direct_schedule
+if not exist "%SCHEDULE%" goto missing
+%PS% "%SCHEDULE%" -NoPause %REST%
 exit /b %ERRORLEVEL%
 
 :direct_restore
@@ -123,7 +157,17 @@ goto back
 goto back
 
 :m_exclude
-start "" notepad.exe "%HERE%WinPkgScan.exclude.txt"
+rem Your exclude list, shared with the app and the scripts.
+if not exist "%LOCALAPPDATA%\WinPkgScan" mkdir "%LOCALAPPDATA%\WinPkgScan"
+if exist "%USERLIST%" goto m_exclude_open
+> "%USERLIST%" echo # Your WinPkgScan exclude list
+>> "%USERLIST%" echo #
+>> "%USERLIST%" echo # Folders matching a line here are left out of scans and are never deleted.
+>> "%USERLIST%" echo # One folder name or pattern per line. * matches anything, ? matches one character.
+>> "%USERLIST%" echo # Lines starting with # are ignored. Example:
+>> "%USERLIST%" echo # Contoso.*
+:m_exclude_open
+start "" notepad.exe "%USERLIST%"
 goto menu
 
 :m_help

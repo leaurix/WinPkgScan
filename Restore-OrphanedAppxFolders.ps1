@@ -42,7 +42,7 @@
     .\Restore-OrphanedAppxFolders.ps1 -Name 'Contoso.*'
 
 .NOTES
-    Version: 1.8.0
+    Version: 1.9.0
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
@@ -59,7 +59,7 @@ param(
     [switch]$NoPause
 )
 
-$ScriptVersion = "1.8.0"
+$ScriptVersion = "1.9.0"
 # Pause at the end only when this script opened its own console window
 # (a batch file or "Run with PowerShell"), so you can read the result before
 # it closes. Never from an open PowerShell prompt, the module, the app, or
@@ -404,6 +404,7 @@ if (-not $NoHistory -and $restored -gt 0) {
             Time    = (Get-Date).ToString('yyyy-MM-dd HH:mm')
             Folders = $restored
             SizeMB  = $restoredMB
+            Log     = (Resolve-Path -LiteralPath $LogPath).ProviderPath
         })
         Save-History -History $History -Path $HistoryPath
     }

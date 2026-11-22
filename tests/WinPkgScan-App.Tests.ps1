@@ -24,11 +24,13 @@ BeforeAll {
     . $script:AppPath -TestMode
 
     function New-Row {
-        param([string]$Name, [string]$Category = 'Orphaned package', [double]$Size = 1, [bool]$New = $false, [string]$Notes = '')
+        param([string]$Name, [string]$Category = 'Orphaned package', [double]$Size = 1, [bool]$New = $false, [string]$Notes = '',
+              [string]$Advice = 'Check first', [string]$DisplayName = '', [string]$Publisher = '')
         ConvertTo-AppRow ([pscustomobject]@{
             FolderName = $Name; Category = $Category; SizeMB = $Size.ToString([System.Globalization.CultureInfo]::InvariantCulture)
             LastModified = '2024-03-15'; FullPath = "C:\x\$Name"; Status = 'NOT CURRENTLY REGISTERED'
             Notes = $Notes; New = $(if ($New) { 'Yes' } else { '' })
+            DisplayName = $DisplayName; Publisher = $Publisher; Advice = $Advice
         })
     }
 }
@@ -125,7 +127,7 @@ Describe 'App script file' {
         }
 
         It 'names every settings control the code looks up' {
-            $SettingsListed.Count | Should -Be 7
+            $SettingsListed.Count | Should -Be 12
             foreach ($name in $SettingsListed) { $SettingsNames | Should -Contain $name }
         }
 
@@ -298,6 +300,38 @@ Describe 'App logic' {
         }
     }
 
+    Context 'app names, advice and the likely safe view' {
+
+        It 'reads the app name, publisher and advice, with the reason' {
+            $r = New-Row -Name 'Contoso.Old_abc123def4567' -DisplayName 'Old' -Publisher 'Contoso' -Advice 'Likely safe'
+            $r.DisplayName | Should -Be 'Old'
+            $r.Publisher | Should -Be 'Contoso'
+            $r.PublisherGroup | Should -Be 'Contoso'
+            $r.AdviceReason | Should -Match 'not installed'
+        }
+
+        It 'falls back to the folder name for scans made by older versions' {
+            $r = ConvertTo-AppRow ([pscustomobject]@{ FolderName = 'A.B_abc123def4567'; Category = 'Orphaned package'; SizeMB = '1' })
+            $r.DisplayName | Should -Be 'A.B_abc123def4567'
+            $r.PublisherGroup | Should -Be 'No publisher'
+            $r.AdviceReason | Should -Be ''
+        }
+
+        It 'shows only markable likely safe folders in the fourth view' {
+            $safe  = New-Row -Name 'S.App_abc123def4567' -Advice 'Likely safe'
+            $check = New-Row -Name 'C.App_abc123def4567' -Advice 'Check first'
+            $win   = New-Row -Name 'windows_ie_ac_001' -Category 'Windows component' -Advice 'Likely safe'
+            @(@($safe, $check, $win) | Where-Object { Test-RowVisible -Row $_ -View 3 -Filter '' }).FolderName | Should -Be 'S.App_abc123def4567'
+        }
+
+        It 'filters by app name and publisher too' {
+            $r = New-Row -Name 'X.Y_abc123def4567' -DisplayName 'Media Player' -Publisher 'Fabrikam'
+            Test-RowVisible -Row $r -View 2 -Filter 'media' | Should -BeTrue
+            Test-RowVisible -Row $r -View 2 -Filter 'fabri' | Should -BeTrue
+            Test-RowVisible -Row $r -View 2 -Filter 'nothing' | Should -BeFalse
+        }
+    }
+
     Context 'settings' {
 
         BeforeEach {
@@ -309,6 +343,30 @@ Describe 'App logic' {
             $s.MinAgeDays  | Should -Be 30
             $s.AdminChecks | Should -Be 'Auto'
             $s.Theme       | Should -Be 'System'
+            $s.ScheduleFrequency | Should -Be 'Off'
+            $s.ScheduleDay | Should -Be 'Sunday'
+            $s.ScheduleTime | Should -Be '19:00'
+            $s.CheckForUpdates | Should -BeTrue
+        }
+
+        It 'saves and reads back the schedule and update settings' {
+            $s = Get-DefaultAppSetting
+            $s.ScheduleFrequency = 'Weekly'; $s.ScheduleDay = 'Friday'; $s.ScheduleTime = '7:30'; $s.CheckForUpdates = $false
+            Save-AppSetting -Path $SettingsPath -Setting $s
+            $r = Read-AppSetting -Path $SettingsPath
+            $r.ScheduleFrequency | Should -Be 'Weekly'
+            $r.ScheduleDay | Should -Be 'Friday'
+            $r.ScheduleTime | Should -Be '7:30'
+            $r.CheckForUpdates | Should -BeFalse
+        }
+
+        It 'ignores schedule values that are not valid' {
+            '{"ScheduleFrequency":"Hourly","ScheduleDay":"Someday","ScheduleTime":"25:00","CheckForUpdates":"maybe"}' | Set-Content -LiteralPath $SettingsPath
+            $r = Read-AppSetting -Path $SettingsPath
+            $r.ScheduleFrequency | Should -Be 'Off'
+            $r.ScheduleDay | Should -Be 'Sunday'
+            $r.ScheduleTime | Should -Be '19:00'
+            $r.CheckForUpdates | Should -BeTrue
         }
 
         It 'saves and reads back the settings' {
@@ -351,6 +409,117 @@ Describe 'App logic' {
             $p.Icon     | Should -Be (Join-Path $RepoRoot 'WinPkgScan.ico')
             $p.Icon     | Should -Exist
             $env:LOCALAPPDATA = $script:SavedLocalAppData
+        }
+    }
+
+    Context 'scheduled scan' {
+
+        It 'accepts 24-hour times only' {
+            foreach ($ok in '0:00', '7:05', '19:00', '23:59') { Test-ScheduleTime -Text $ok | Should -BeTrue -Because $ok }
+            foreach ($bad in '', '24:00', '7:5', '7pm', '19.00') { Test-ScheduleTime -Text $bad | Should -BeFalse -Because $bad }
+        }
+
+        It 'sees when the schedule changed' {
+            $a = Get-DefaultAppSetting
+            $b = Get-DefaultAppSetting
+            Test-ScheduleChanged -Old $a -New $b | Should -BeFalse
+            $b.ScheduleTime = '08:00'
+            Test-ScheduleChanged -Old $a -New $b | Should -BeFalse -Because 'the time does not matter while it is off'
+            $b.ScheduleFrequency = 'Daily'
+            Test-ScheduleChanged -Old $a -New $b | Should -BeTrue
+        }
+
+        It 'passes only options the schedule script has' {
+            $s = Get-DefaultAppSetting
+            $s.ScheduleFrequency = 'Weekly'
+            $arguments = Get-ScheduleArgument -Setting $s
+            $arguments.Day | Should -Be 'Sunday'
+            $arguments.Time | Should -Be '19:00'
+            $known = (Get-Command (Join-Path $RepoRoot 'Register-WinPkgScanSchedule.ps1')).Parameters.Keys
+            foreach ($name in $arguments.Keys) { $known | Should -Contain $name }
+            $s.ScheduleFrequency = 'Off'
+            (Get-ScheduleArgument -Setting $s).Keys | Should -Not -Contain 'Day'
+        }
+    }
+
+    Context 'right-click exclude' {
+
+        It 'adds a folder to your exclude list once, ignoring case' {
+            $file = Join-Path (Join-Path $TestDrive 'excl') 'exclude.txt'
+            Add-ExcludePattern -Path $file -Pattern 'Contoso.Old_abc123def4567' | Should -BeTrue
+            Add-ExcludePattern -Path $file -Pattern 'contoso.old_ABC123DEF4567' | Should -BeFalse
+            Get-ExcludeCount -Text (Read-ExcludeText -Path $file) | Should -Be 1
+        }
+    }
+
+    Context 'restoring any past delete' {
+
+        BeforeAll {
+            $script:LogDir = Join-Path $TestDrive 'logs-any'
+            New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+            foreach ($stamp in '20261001-100300', '20261001-120000') {
+                Set-Content -LiteralPath (Join-Path $LogDir "WinPkgScan-DeleteLog-$stamp.csv") -Value 'x'
+            }
+        }
+
+        It 'uses the log saved in the history' {
+            $log = Join-Path $LogDir 'WinPkgScan-DeleteLog-20261001-120000.csv'
+            Find-DeleteLog -Time '2026-10-01 10:05' -Log $log -Folder $LogDir | Should -Be $log
+        }
+
+        It 'finds the log for older history entries by time' {
+            Find-DeleteLog -Time '2026-10-01 10:05' -Log '' -Folder $LogDir | Should -Be (Join-Path $LogDir 'WinPkgScan-DeleteLog-20261001-100300.csv')
+        }
+
+        It 'finds nothing when no log is close in time' {
+            Find-DeleteLog -Time '2026-10-03 10:00' -Log '' -Folder $LogDir | Should -BeNullOrEmpty
+            Find-DeleteLog -Time 'not a time' -Log '' -Folder $LogDir | Should -BeNullOrEmpty
+        }
+
+        It 'lets you restore recycled deletes, and says when one was restored' {
+            $h = [pscustomobject]@{
+                Scans    = @()
+                Removals = @([pscustomobject]@{ Time = '2026-10-01 10:05'; Folders = 2; FreedMB = 10; Mode = 'Recycled'; Log = 'C:\l\a.csv' },
+                             [pscustomobject]@{ Time = '2026-10-02 10:05'; Folders = 1; FreedMB = 5; Mode = 'Deleted'; Log = 'C:\l\b.csv' })
+                Restores = @([pscustomobject]@{ Time = '2026-10-03 10:00'; Folders = 2; SizeMB = 10; Log = 'C:\l\a.csv' })
+            }
+            $rows = @(Get-HistoryActivity -History $h)
+            $recycled = $rows | Where-Object Event -eq 'Moved to Recycle Bin'
+            $recycled.CanRestore | Should -BeTrue
+            $recycled.Log | Should -Be 'C:\l\a.csv'
+            $recycled.Detail | Should -Match 'restored since'
+            ($rows | Where-Object Event -eq 'Deleted permanently').CanRestore | Should -BeFalse
+        }
+    }
+
+    Context 'update check' {
+
+        It 'sees a newer release' {
+            $i = Get-UpdateInfo -Release ([pscustomobject]@{ tag_name = 'v1.10.0'; html_url = 'https://example.org/r' }) -Current '1.9.0'
+            $i.Newer | Should -BeTrue
+            $i.Version | Should -Be '1.10.0'
+            $i.Url | Should -Be 'https://example.org/r'
+        }
+
+        It 'does not offer the same, an older or a broken version' {
+            (Get-UpdateInfo -Release ([pscustomobject]@{ tag_name = 'v1.9.0' }) -Current '1.9.0').Newer | Should -BeFalse
+            (Get-UpdateInfo -Release ([pscustomobject]@{ tag_name = 'v1.8.0' }) -Current '1.9.0').Newer | Should -BeFalse
+            (Get-UpdateInfo -Release ([pscustomobject]@{ tag_name = 'latest' }) -Current '1.9.0').Newer | Should -BeFalse
+        }
+
+        It 'checks at most once a day' {
+            $now = [datetime]'2026-11-06T12:00:00'
+            Test-UpdateCheckDue -LastCheck '' -Now $now | Should -BeTrue
+            Test-UpdateCheckDue -LastCheck '2026-11-06T08:00:00' -Now $now | Should -BeFalse
+            Test-UpdateCheckDue -LastCheck '2026-11-05T08:00:00' -Now $now | Should -BeTrue
+        }
+
+        It 'remembers the last answer' {
+            $file = Join-Path $TestDrive 'update.json'
+            Save-UpdateState -Path $file -Version '2.0.0' -Url 'https://example.org/r'
+            $s = Read-UpdateState -Path $file
+            $s.Version | Should -Be '2.0.0'
+            Test-UpdateCheckDue -LastCheck $s.LastCheck | Should -BeFalse
         }
     }
 

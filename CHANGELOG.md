@@ -3,6 +3,36 @@
 All notable changes to this project are listed here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-11-06
+
+### Added
+- **Scheduled scans:** daily or weekly, set in the app's Settings or with `Register-WinPkgScanSchedule.ps1` (also `WinPkgScan.bat schedule` and the module command `Register-WinPkgScanSchedule`). It runs for you only, while you are signed in, with no administrator rights. The scan is read-only and shows a Windows notification when new orphaned folders are found; clicking it opens the report.
+  - `-Notify` on the scanner shows that notification.
+- **Smarter results:** every folder gets the app name and publisher worked out from its name (with friendly names for common Microsoft apps), and advice: **Likely safe**, **Check first** or **Keep**, with the reason.
+  - New `DisplayName`, `Publisher` and `Advice` columns at the end of the CSV, and in the text and HTML reports.
+  - A **Likely safe to remove** total in the summary, the report and an app card.
+  - In the app: a **Likely safe to remove** view, **Group by publisher**, and filtering by app or publisher.
+- **Restore any past delete:** select it in the History tab and click **Restore selected delete**. The remover now records each delete log in the history; older entries are matched to the app's logs by time.
+- **Right-click menu** in the app's results: open folder, copy path, copy name, mark, unmark, and **exclude this folder**.
+- **One-line install and update:** `irm https://raw.githubusercontent.com/leaurix/WinPkgScan/main/web-install.ps1 | iex` downloads the latest release, checks its SHA256 checksum and installs it. Nothing is installed if the checksum does not match.
+- **Update check:** the app asks GitHub once a day whether a newer version is out and shows an **Update** button. It can be turned off in Settings.
+- Drag a marked CSV onto `WinPkgScan.bat` to remove its folders.
+- The app's self-test reports each part on its own, so a failure says where it happened.
+- Tests for the schedule (with a real task on Windows), the web installer, the advice and names, notifications, restoring any delete and the update check.
+
+### Changed
+- **One exclude list:** `%LOCALAPPDATA%\WinPkgScan\exclude.txt`, used by the app, the menu (option 7) and the scripts. Installing moves the patterns from an old `WinPkgScan.exclude.txt` into it.
+- Uninstalling also removes the scheduled scan.
+- The restore history records which delete was restored, and the History tab shows it.
+
+### Removed
+- `Run-Scan.bat`, `Run-Scan-Unattended.bat` and `Run-Delete.bat`: `WinPkgScan.bat` does the same (`scan`, `delete`, or drag a CSV onto it). Installing removes them from an older install.
+- `WinPkgScan.exclude.txt` is no longer shipped. An existing one next to the scripts is still read.
+- The **Other folders** card in the app. Other folders are still listed in **All folders**.
+
+### Fixed
+- Wording that still called the app a preview, and README examples that used 1.7.0.
+
 ## [1.8.0] - 2026-11-03
 
 ### Added
